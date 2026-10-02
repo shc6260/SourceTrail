@@ -1,0 +1,15 @@
+{
+  "Analysis": {
+    "SolutionPath": "",
+    "ProcedureCallRules": [
+      {
+        "TypeName": "Demo.Data.Db",
+        "MethodName": "ExecuteProcedure",
+        "ArgumentIndex": 0
+      }
+    ]
+  },
+  "Database": {
+    "ConnectionString": ""
+  }
+}

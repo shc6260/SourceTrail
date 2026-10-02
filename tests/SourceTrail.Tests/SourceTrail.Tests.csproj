@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <ProjectReference Include="../../src/SourceTrail.Core/SourceTrail.Core.csproj" />
+    <ProjectReference Include="../../src/SourceTrail.Roslyn/SourceTrail.Roslyn.csproj" />
+    <ProjectReference Include="../../src/SourceTrail.SqlServer/SourceTrail.SqlServer.csproj" />
+  </ItemGroup>
+</Project>

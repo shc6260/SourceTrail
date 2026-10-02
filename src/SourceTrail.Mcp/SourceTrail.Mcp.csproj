@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <ProjectReference Include="../SourceTrail.Core/SourceTrail.Core.csproj" />
+    <ProjectReference Include="../SourceTrail.Roslyn/SourceTrail.Roslyn.csproj" />
+    <ProjectReference Include="../SourceTrail.SqlServer/SourceTrail.SqlServer.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="appsettings.example.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

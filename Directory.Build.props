@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+  <!-- Use the selected MSBuild installation at runtime instead of copying its assemblies. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'SourceTrail.Roslyn' Or '$(MSBuildProjectName)' == 'SourceTrail.Mcp' Or '$(MSBuildProjectName)' == 'SourceTrail.Tests'">
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

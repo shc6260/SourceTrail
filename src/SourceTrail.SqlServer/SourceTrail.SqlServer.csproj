@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SourceTrail.Core/SourceTrail.Core.csproj" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+  </ItemGroup>
+</Project>
