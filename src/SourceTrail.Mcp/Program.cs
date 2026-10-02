@@ -15,6 +15,19 @@ internal static class Program
 {
     public static async Task Main(string[] args)
     {
+        var builder = CreateBuilder(args);
+        var analysisOptions = RegisterServices(builder);
+
+        using var host = builder.Build();
+        var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
+        startupLogger.LogInformation("SourceTrail MCP starting.");
+        await LoadConfiguredSolutionAsync(host, analysisOptions, startupLogger);
+        await host.RunAsync();
+    }
+
+    // 실행한 작업 폴더와 무관하게 서버 DLL 옆의 설정을 읽고 로그는 stderr로 보낸다.
+    private static HostApplicationBuilder CreateBuilder(string[] args)
+    {
         var builder = Host.CreateApplicationBuilder(args);
         // Resolve configuration next to the executable, independent of the MCP client's working directory.
         builder.Configuration.Sources.Clear();
@@ -26,6 +39,12 @@ internal static class Program
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
 
+        return builder;
+    }
+
+    // 분석기는 Singleton으로 등록해 도구 호출 간 작업 공간과 색인을 재사용한다.
+    private static AnalysisOptions RegisterServices(HostApplicationBuilder builder)
+    {
         var analysisOptions = builder.Configuration.GetSection("Analysis").Get<AnalysisOptions>() ?? new();
         var databaseOptions = builder.Configuration.GetSection("Database").Get<DatabaseOptions>() ?? new();
         builder.Services.AddSingleton(analysisOptions);
@@ -45,10 +64,12 @@ internal static class Program
         builder.Services.AddSingleton(new SemaphoreSlim(1, 1));
         builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();
 
-        using var host = builder.Build();
-        var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
-        startupLogger.LogInformation("SourceTrail MCP starting.");
-        // Loading is explicit by default. An optional startup path uses the same validation and diagnostics.
+        return analysisOptions;
+    }
+
+    private static async Task LoadConfiguredSolutionAsync(IHost host, AnalysisOptions analysisOptions, ILogger startupLogger)
+    {
+        // 시작 경로가 없으면 load_solution 호출을 기다린다. 시작 로딩 실패도 도구로 재시도할 수 있다.
         if (!string.IsNullOrWhiteSpace(analysisOptions.SolutionPath))
         {
             try { await host.Services.GetRequiredService<ICodeAnalyzer>().LoadAsync(analysisOptions.SolutionPath, CancellationToken.None); }
@@ -57,6 +78,6 @@ internal static class Program
                 startupLogger.LogWarning("Configured solution load failed ({ErrorType}); use load_solution to retry.", error.GetType().Name);
             }
         }
-        await host.RunAsync();
     }
+
 }
