@@ -23,6 +23,12 @@ $startInfo.EnvironmentVariables['Analysis__ProcedureCallRules__0__MethodName'] =
 $startInfo.EnvironmentVariables['Analysis__ProcedureCallRules__0__ArgumentIndex'] = '0'
 $process = New-Object System.Diagnostics.Process
 $process.StartInfo = $startInfo
+$startInfo.EnvironmentVariables['Database__Mode'] = 'LiveDatabase'
+$startInfo.EnvironmentVariables['Database__SqlFolder'] = ''
+$sqlFixture = Join-Path ([IO.Path]::GetTempPath()) ('SourceTrail-mcp-' + [Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($sqlFixture)
+$startInfo.EnvironmentVariables['Database__CacheDirectory'] = Join-Path $sqlFixture 'cache'
+[IO.File]::WriteAllText((Join-Path $sqlFixture 'objects.sql'), "CREATE TABLE dbo.Reception(Id int);`nGO`nCREATE PROCEDURE dbo.usp_TestSave AS EXEC dbo.usp_Inner;`nGO`nCREATE PROCEDURE dbo.usp_Inner AS INSERT dbo.Reception VALUES(1);")
 $requestId = 0
 try {
     [void]$process.Start()
@@ -59,7 +65,8 @@ try {
     $tools = Invoke-Request 'tools/list' @{}
     $expected = @('ping','load_solution','get_analysis_status','reload_solution','find_symbol',
         'get_symbol_overview','find_references','search_text','find_procedure_usage',
-        'analyze_procedure','trace_code_to_database','trace_procedure_to_ui')
+        'analyze_procedure','trace_code_to_database','trace_procedure_to_ui',
+        'select_database_source','get_database_status','refresh_database_source','find_sql_object')
     foreach ($name in $expected) {
         if (-not ($tools.tools | Where-Object { $_.name -eq $name })) { throw "Tool missing: $name" }
     }
@@ -93,4 +100,7 @@ try {
 } finally {
     if ($process.Id -and -not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) }
     $process.Dispose()
+    $resolvedFixture = [IO.Path]::GetFullPath($sqlFixture)
+    if ($resolvedFixture.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase) -and (Split-Path $resolvedFixture -Leaf).StartsWith('SourceTrail-mcp-'))
+        { Remove-Item -LiteralPath $resolvedFixture -Recurse -Force }
 }

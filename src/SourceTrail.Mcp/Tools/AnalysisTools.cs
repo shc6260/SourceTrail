@@ -43,7 +43,7 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_procedure_usage", () => code.ProcedureUsagesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Reads SQL Server procedure metadata and direct dependencies. READ/WRITE remains Unknown. Definition is opt-in; does not execute the procedure.")]
+    [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Analyzes a procedure from the selected SQL source (SqlFiles or LiveDatabase). Returns provenance and direct dependencies; definition is opt-in. Does not execute SQL.")]
     public Task<ProcedureAnalysis> AnalyzeProcedure(string procedure, CancellationToken cancellationToken, bool includeDefinition = false) =>
         Run(cancellationToken, "analyze_procedure", () => sql.AnalyzeAsync(procedure, includeDefinition, cancellationToken));
 
@@ -59,7 +59,12 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     {
         await executionGate.WaitAsync(cancellationToken);
         var timer = Stopwatch.StartNew();
-        try { return await operation(); }
+        try
+        {
+            if (tool is not "load_solution" and not "reload_solution" && code is IRefreshableCodeAnalyzer refreshable)
+                await refreshable.EnsureFreshAsync(cancellationToken);
+            return await operation();
+        }
         catch (Exception error)
         {
             logger.LogWarning("{Tool} failed ({ErrorType}).", tool, error.GetType().Name);

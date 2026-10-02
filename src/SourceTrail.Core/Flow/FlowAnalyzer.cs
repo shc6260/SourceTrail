@@ -46,16 +46,34 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
                 edges.Add(new(expansion.Symbol.Id, id, usage.RelationType, usage.Evidence, usage.File, usage.Line));
                 if (usage.RelationType == "ProcedureCommandConfiguration") partial = true;
                 if (next.Depth + 1 >= maxDepth) { truncated = true; continue; }
-                var analyzed = await sql.AnalyzeAsync(usage.Procedure, false, cancellationToken);
-                if (analyzed.Status != "Ready") partial = true;
-                foreach (var warning in analyzed.Warnings) warnings.Add(warning);
-                foreach (var dependency in analyzed.Dependencies)
+                var sqlPending = new Queue<(string Name, string Id, int Depth)>();
+                var sqlVisited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                sqlPending.Enqueue((usage.Procedure, id, next.Depth + 1));
+                while (sqlPending.TryDequeue(out var sqlNext))
                 {
-                    string dependencyId = ObjectId(dependency);
-                    if (!AddNode(new(dependencyId, dependency.Name, dependency.Kind,
-                        Schema: dependency.Schema, Database: dependency.Database)))
-                    { truncated = true; continue; }
-                    edges.Add(new(id, dependencyId, "SqlDependency", $"Access: {dependency.Access}; resolved: {dependency.Resolved}."));
+                    if (!sqlVisited.Add(sqlNext.Id)) continue;
+                    var analyzed = await sql.AnalyzeAsync(sqlNext.Name, false, cancellationToken);
+                    if (analyzed.Status != "Ready") partial = true;
+                    foreach (var warning in analyzed.Warnings) warnings.Add(warning);
+                    if (sqlNext.Depth >= maxDepth) { if (analyzed.Dependencies.Count > 0) truncated = true; continue; }
+                    foreach (var dependency in analyzed.Dependencies)
+                    {
+                        string dependencyId = ObjectId(dependency);
+                        if (!AddNode(new(dependencyId, dependency.Name, dependency.Kind,
+                            File: dependency.File, Line: dependency.Line, Schema: dependency.Schema, Database: dependency.Database)))
+                        { truncated = true; continue; }
+                        edges.Add(new(sqlNext.Id, dependencyId, "SqlDependency",
+                            $"Source: {analyzed.Source}; access: {dependency.Access}; resolved: {dependency.Resolved}.", dependency.File, dependency.Line));
+                        if (!dependency.Resolved || dependency.CallerDependent || dependency.Ambiguous) { partial = true; continue; }
+                        if (dependency.Kind is "Procedure" or "SQL_STORED_PROCEDURE")
+                        {
+                            if (analyzed.Source == "LiveDatabase" && dependency.Database != analyzed.Database)
+                            { partial = true; warnings.Add("Cross-database procedure traversal requires separate connection configuration."); continue; }
+                            var name = analyzed.Source == "SqlFiles" && dependency.Database is not null
+                                ? $"{dependency.Database}.{dependency.Schema}.{dependency.Name}" : $"{dependency.Schema}.{dependency.Name}";
+                            sqlPending.Enqueue((name, dependencyId, sqlNext.Depth + 1));
+                        }
+                    }
                 }
             }
         }

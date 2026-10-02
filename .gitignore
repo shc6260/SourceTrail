@@ -16,3 +16,7 @@ analysis-results/
 !**/appsettings.example.json
 TestResults/
 artifacts/
+
+cache/
+**/sql-*.json
+**/sql-*.json.*.tmp

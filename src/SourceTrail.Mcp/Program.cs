@@ -35,11 +35,12 @@ internal static class Program
             var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Roslyn");
             return new RoslynAnalyzer(analysisOptions, message => logger.LogInformation("{Diagnostic}", message));
         });
-        builder.Services.AddSingleton<IProcedureAnalyzer>(services =>
+        builder.Services.AddSingleton<DatabaseAnalyzer>(services =>
         {
             var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("SqlServer");
-            return new SqlProcedureAnalyzer(databaseOptions, message => logger.LogWarning("{Diagnostic}", message));
+            return new DatabaseAnalyzer(databaseOptions, message => logger.LogWarning("{Diagnostic}", message));
         });
+        builder.Services.AddSingleton<IProcedureAnalyzer>(services => services.GetRequiredService<DatabaseAnalyzer>());
         builder.Services.AddSingleton<FlowAnalyzer>();
         builder.Services.AddSingleton(new SemaphoreSlim(1, 1));
         builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();

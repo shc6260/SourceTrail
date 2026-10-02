@@ -4,6 +4,10 @@
 
 | 도구 | 입력 예제 |
 |---|---|
+| select_database_source | `{"mode":"SqlFiles","sqlFolder":"E:\\DatabaseScripts"}` |
+| get_database_status | `{}` |
+| refresh_database_source | `{}` |
+| find_sql_object | `{"query":"Reception","includeDefinition":false}` |
 | ping | `{}` |
 | load_solution | `{"solutionPath":"D:\\Projects\\Sample\\Sample.sln"}` |
 | get_analysis_status | `{}` |
@@ -28,7 +32,7 @@ get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다.
 - DispatchCandidate: 인터페이스 호출의 구현 후보. 실행 대상 확인 필요.
 - ConfiguredProcedureCall: Roslyn으로 해석한 메서드와 외부 DB 래퍼 계약이 일치.
 - ProcedureCommandConfiguration: DbCommand 생성 시 StoredProcedure와 상수 CommandText 설정을 확인. 실행 확인이 아니므로 verified flow에서 제외.
-- SqlDependency: DB 메타데이터의 직접 의존성. Access는 Unknown.
+- SqlDependency: 선택된 자료의 의존성. 출처와 파일/줄 또는 메타데이터 근거를 표시. LiveDatabase의 Access는 Unknown, SqlFiles는 Insert/ReadCandidate 등의 문법 근거를 표시.
 
 프로시저 주석은 search_text에서 발견할 수 있으나 find_procedure_usage의 호출 결과에는 포함되지 않습니다. 후보는 해당 위치를 포함하는 Roslyn 심볼과 함께 반환합니다.
 
@@ -43,3 +47,5 @@ get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다.
 - truncated: 깊이·노드·검색 결과 제한으로 일부 결과 생략.
 
 모호한 C# 이름은 오류와 함께 정확한 심볼 ID 선택을 요청합니다. 재로딩하면 ID와 캐시가 바뀝니다. 코드와 배포된 DB 정의가 같은 버전인지 별도 확인해야 합니다.
+
+NotFoundInProvidedFiles는 제공된 SQL 파일에 없는 상태이며 실제 DB 부재를 의미하지 않습니다. [자료 선택·캐시·갱신](sql-sources.md)을 참고하세요.

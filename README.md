@@ -8,10 +8,10 @@ C# 솔루션의 화면·메서드·프로시저·SQL 객체 관계를 추적하�
 - Roslyn 심볼 검색·구조 조회·참조 검색
 - 문자열 검색 및 프로시저 문자열/상수 → 포함 심볼 연결
 - 설정된 DB 호출 래퍼의 프로시저 인자 판별
-- SQL Server 프로시저 정의 및 직접 의존성 조회
+- SQL 폴더 / 실제 DB 모드 선택, 개체 정의·참조 분석
 - 코드→DB / 프로시저→호출자·WinForms 이벤트 역추적
-- 메모리 캐시, 깊이·노드 제한, 순환 탐색 방지, 부분 로딩 진단
-- 17개 테스트와 실제 MCP stdio 도구 호출 검증
+- SQL 디스크 캐시·변경 갱신, C# 메모리 캐시·입력 변경 대조, 깊이·노드 제한
+- 자동 테스트와 16개 도구의 MCP stdio 호출 검증
 
 실제 .NET Framework 4.6.2 업무 솔루션 및 운영 DB는 아직 검증하지 않았습니다. 원격 WCF 계약→서버 구현 자동 연결과 동적 SQL 분석은 지원하지 않습니다. 인터페이스 구현 후보는 실제 실행 대상으로 확정하지 않습니다.
 
@@ -32,14 +32,18 @@ dotnet build SourceTrail.sln --no-restore
 dotnet src/SourceTrail.Mcp/bin/Debug/net10.0/SourceTrail.Mcp.dll
 ```
 
-배포 시에는 `dotnet publish src/SourceTrail.Mcp -c Release -o artifacts/server`로 서버와 Roslyn BuildHost를 함께 배포합니다. 로그는 stderr에 출력합니다. 실행 중인 분석 스냅샷은 재로딩 전까지 유지되며 소스 변경은 자동 반영하지 않습니다.
+배포 시에는 `dotnet publish src/SourceTrail.Mcp -c Release -o artifacts/server`로 서버와 Roslyn BuildHost를 함께 배포합니다. 로그는 stderr에 출력합니다. C# 분석 요청 전에 입력 변경을 대조하고 변경 시 재로딩합니다. SQL 파일은 변경 감지 및 주기적 대조로 갱신합니다.
 
 ## 설정
 
 `appsettings.example.json`을 복사해 실행 DLL 옆의 `appsettings.json`으로 저장하거나 환경변수를 사용합니다. 실제 설정 파일은 Git에서 제외됩니다.
 
 - `Analysis__SolutionPath`: 선택적 시작 솔루션 경로. 기본은 빈 값이며 `load_solution`으로 명시적 로딩.
-- `Database__ConnectionString`: 선택적 SQL Server 연결 문자열.
+- `Database__Mode`: `SqlFiles` 또는 `LiveDatabase`(기본).
+- `Database__SqlFolder`: SQL 파일 모드의 절대 폴더 경로.
+- `Database__CacheDirectory`: SQL 캐시 폴더. 빈 값이면 사용자 LocalAppData 아래 사용.
+- `Database__WatchFiles`: SQL 파일 변경 감지 여부(기본 true).
+- `Database__ConnectionString`: DB 직접 조회 모드의 SQL Server 연결 문자열.
 - `Analysis__MaxDepth`: 기본 5, 도구 입력 허용 범위 0..20.
 - `Analysis__MaxNodes`: 기본 200, 도구 입력 허용 범위 1..2000.
 - `Analysis__MaxResults`: 기본 100, 검색 limit 허용 범위 1..1000.
@@ -83,3 +87,5 @@ powershell -NoProfile -File scripts/Smoke-Mcp.ps1
 [limitations.md](docs/limitations.md)에 지원 범위를 기록합니다. `Ready`는 지원되는 정적 분석 범위의 상태이며 운영 실행·저장 성공을 뜻하지 않습니다. 전체 소스 body는 반환하지 않습니다.
 
 실제 업무 소스, 내부 접속정보, 분석 결과와 로그는 커밋하지 않습니다. GitHub 업로드 및 라이선스 선택은 아직 진행하지 않았습니다.
+
+SQL 입력 선택과 지원 범위: [SQL 자료와 캐시](docs/sql-sources.md).

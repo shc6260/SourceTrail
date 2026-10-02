@@ -25,10 +25,10 @@ public sealed record CodeRelation(SymbolInfo From, SymbolInfo To, string Relatio
 public sealed record CodeExpansion(SymbolInfo Symbol, IReadOnlyList<CodeRelation> Relations,
     IReadOnlyList<ProcedureUsage> ProcedureUsages, IReadOnlyList<string> Warnings);
 public sealed record SqlObject(string? Server, string? Database, string? Schema, string Name,
-    string Kind, string Access, bool Resolved, bool CallerDependent, bool Ambiguous);
+    string Kind, string Access, bool Resolved, bool CallerDependent, bool Ambiguous, string? File = null, int? Line = null);
 public sealed record ProcedureAnalysis(string Status, string Procedure, string? Schema,
     string? Database, string? Definition, IReadOnlyList<SqlObject> Dependencies,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings, string Source = "LiveDatabase", string? SourcePath = null, DateTimeOffset? AnalyzedAt = null);
 public sealed record FlowNode(string Id, string Name, string Kind, string? Project = null,
     string? File = null, int? Line = null, string? Schema = null, string? Database = null);
 public sealed record FlowEdge(string From, string To, string RelationType, string Evidence,
@@ -48,6 +48,10 @@ public sealed class AnalysisOptions
 }
 public sealed class DatabaseOptions
 {
+    public string Mode { get; set; } = "LiveDatabase";
+    public string SqlFolder { get; set; } = "";
+    public string CacheDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SourceTrail", "cache");
+    public bool WatchFiles { get; set; } = true;
     public string ConnectionString { get; set; } = "";
     public int CommandTimeoutSeconds { get; set; } = 15;
 }

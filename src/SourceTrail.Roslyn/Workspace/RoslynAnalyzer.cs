@@ -13,7 +13,7 @@ using RSymbol = Microsoft.CodeAnalysis.ISymbol;
 
 namespace SourceTrail.Roslyn.Workspace;
 
-public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null) : ICodeAnalyzer
+public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null) : ICodeAnalyzer, IRefreshableCodeAnalyzer
 {
     private readonly AnalysisOptions _options = options ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -27,6 +27,8 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     private readonly Dictionary<string, (RSymbol Symbol, ProjectId Project)> _symbols = new();
     private readonly Dictionary<string, CodeExpansion> _expansions = new();
     private IReadOnlyList<ProcedureUsage>? _usages;
+    private SolutionInputTracker _inputs = new();
+    private bool _reloadRequired;
     private SolutionState _state = new("NotLoaded", null, null, null, [], []);
 
     public SolutionState Status() => _state;
@@ -76,6 +78,8 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             var collected = diagnostics.ToArray();
             var nextState = new SolutionState(collected.Any(d => d.Severity is "Failure" or "Error") || projects.Count == 0
                 ? "Partial" : "Ready", path, Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow, projects, collected);
+            var nextInputs = new SolutionInputTracker();
+            await nextInputs.ChangedAsync(nextState, InputPaths(solution), cancellationToken);
             // Publish only after the new solution is loaded. A failed replacement preserves the old snapshot.
             _workspace?.Dispose();
             _workspace = pending;
@@ -85,10 +89,31 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             _expansions.Clear();
             _usages = null;
             _state = nextState;
+            _inputs = nextInputs;
             log?.Invoke($"Solution loaded: {projects.Count} projects, status {_state.Status}.");
             return _state;
         }
         finally { pending?.Dispose(); _gate.Release(); }
+    }
+
+    private IEnumerable<string> InputPaths(Solution? solution = null) => (solution ?? _solution)?.Projects.SelectMany(p =>
+        p.Documents.Select(d => d.FilePath).Concat(p.AdditionalDocuments.Select(d => d.FilePath))
+        .Concat(p.AnalyzerConfigDocuments.Select(d => d.FilePath))
+        .Concat(p.AnalyzerReferences.Select(r => r.FullPath))
+        .Concat(p.FilePath is null ? [] : new[] { p.FilePath,
+            Path.Combine(Path.GetDirectoryName(p.FilePath)!, "obj", "project.assets.json"),
+            Path.Combine(Path.GetDirectoryName(p.FilePath)!, "obj", Path.GetFileName(p.FilePath) + ".nuget.g.props"),
+            Path.Combine(Path.GetDirectoryName(p.FilePath)!, "obj", Path.GetFileName(p.FilePath) + ".nuget.g.targets") })
+        .Concat(p.MetadataReferences.OfType<PortableExecutableReference>().Select(r => r.FilePath)))
+        .Where(p => p is not null).Cast<string>() ?? [];
+    public async Task EnsureFreshAsync(CancellationToken cancellationToken)
+    {
+        if (_state.SolutionPath is null) return;
+        if (_reloadRequired || await _inputs.ChangedAsync(_state, InputPaths(), cancellationToken))
+        {
+            try { await ReloadAsync(cancellationToken); _reloadRequired = false; }
+            catch { _reloadRequired = true; throw; }
+        }
     }
 
     private static void RegisterMsBuild()
