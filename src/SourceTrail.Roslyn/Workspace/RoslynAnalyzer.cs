@@ -31,6 +31,7 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     // Internal progress hook enables deterministic cancellation regression tests.
     internal Action? SymbolDocumentIndexed { get; set; }
     private readonly Dictionary<string, CodeExpansion> _expansions = new();
+    private readonly Dictionary<DocumentId, IReadOnlyList<ProcedureUsage>> _configuredUsagesByDocument = new();
     private IReadOnlyList<ProcedureUsage>? _usages;
     private SolutionInputTracker _inputs = new();
     private bool _reloadRequired;
@@ -252,11 +253,49 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
                 var root = await document.GetSyntaxRootAsync(cancellationToken);
                 var model = await document.GetSemanticModelAsync(cancellationToken);
                 if (root is null || model is null) continue;
-                CollectConfiguredCalls(document, root, model, usages, cancellationToken);
+                usages.AddRange(ConfiguredUsages(document, root, model, cancellationToken));
                 CollectCommandConfigurations(document, root, model, usages, cancellationToken);
                 CollectStringCandidates(document, root, model, usages, cancellationToken);
             }
         _usages = usages.DistinctBy(u => (u.Procedure, u.File, u.Line, u.ContainingSymbol?.Id, u.RelationType)).ToArray();
+    }
+
+    private IReadOnlyList<ProcedureUsage> ConfiguredUsages(Document document, SyntaxNode root, SemanticModel model,
+        CancellationToken cancellationToken)
+    {
+        if (_options.ProcedureCallRules.Length == 0) return [];
+        if (_configuredUsagesByDocument.TryGetValue(document.Id, out var cached)) return cached;
+        var usages = new List<ProcedureUsage>();
+        CollectConfiguredCalls(document, root, model, usages, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return _configuredUsagesByDocument[document.Id] = usages.DistinctBy(
+            usage => (usage.Procedure, usage.File, usage.Line, usage.ContainingSymbol?.Id, usage.RelationType)).ToArray();
+    }
+
+    private async Task<IReadOnlyList<ProcedureUsage>> VerifiedUsagesAsync(RSymbol symbol, SymbolInfo described,
+        CancellationToken cancellationToken)
+    {
+        if (_usages is not null)
+            return _usages.Where(usage => usage.ContainingSymbol?.Id == described.Id && usage.IsVerifiedCall).ToArray();
+        if (_options.ProcedureCallRules.Length == 0) return [];
+
+        var solution = RequireSolution();
+        var visited = new HashSet<DocumentId>();
+        var usages = new List<ProcedureUsage>();
+        var declarations = symbol.DeclaringSyntaxReferences.AsEnumerable();
+        if (symbol is IMethodSymbol { PartialImplementationPart: { } implementation })
+            declarations = declarations.Concat(implementation.DeclaringSyntaxReferences);
+        foreach (var syntax in declarations)
+        {
+            var document = solution.GetDocument(syntax.SyntaxTree);
+            if (document is null || !visited.Add(document.Id)) continue;
+            var root = await document.GetSyntaxRootAsync(cancellationToken);
+            var model = await document.GetSemanticModelAsync(cancellationToken);
+            if (root is null || model is null) continue;
+            usages.AddRange(ConfiguredUsages(document, root, model, cancellationToken)
+                .Where(usage => usage.ContainingSymbol?.Id == described.Id));
+        }
+        return usages;
     }
 
     private static bool IsDbCommand(ITypeSymbol? type)
@@ -271,7 +310,7 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            await EnsureUsagesAsync(cancellationToken);
+            await EnsureSymbolsAsync(cancellationToken);
             var selected = Resolve(symbol);
             string key = Id(selected.Symbol, selected.Project) + (callers ? ":in" : ":out");
             if (_expansions.TryGetValue(key, out var cached)) { AnalysisTelemetry.CacheHit("code.expansion"); return cached; }
@@ -283,8 +322,8 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             var warnings = new List<string>();
             if (selected.Symbol.ContainingType?.GetAttributes().Any(a => a.AttributeClass?.Name == "ServiceContractAttribute") == true)
                 warnings.Add("WCF contract boundary: a remote implementation is not inferred from method names.");
-            var result = new CodeExpansion(described, relations,
-                _usages!.Where(u => u.ContainingSymbol?.Id == described.Id && u.IsVerifiedCall).ToArray(), warnings);
+            var usages = await VerifiedUsagesAsync(selected.Symbol, described, cancellationToken);
+            var result = new CodeExpansion(described, relations, usages, warnings);
             _expansions[key] = result;
             return result;
         }
@@ -468,6 +507,7 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         _symbolsReady = false;
         _expansions.Clear();
         _usages = null;
+        _configuredUsagesByDocument.Clear();
         _state = nextState;
         _inputs = nextInputs;
     }

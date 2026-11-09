@@ -132,6 +132,26 @@ public sealed class PerformanceRegressionTests
 public sealed class SymbolCancellationTests(LoadedSolution fixture)
 {
     [Fact]
+    public async Task ColdExpansionPreservesVerifiedCallsWithoutPromotingTextCandidates()
+    {
+        using var code = new RoslynAnalyzer(new AnalysisOptions
+        {
+            ProcedureCallRules = [new("Demo.Data.Db", "ExecuteProcedure", 0)]
+        });
+        await code.LoadAsync(fixture.FixturePath, default);
+        var cold = await code.ExpandAsync("Demo.Data.Repository.Save()", false, default);
+        var usage = Assert.Single(cold.ProcedureUsages);
+        Assert.True(usage.IsVerifiedCall);
+        Assert.Equal("dbo.usp_TestSave", usage.Procedure);
+
+        var indexed = await code.ProcedureUsagesAsync("dbo.usp_TestSave", 0, 100, default);
+        Assert.Equal(usage, Assert.Single(indexed.Items, item => item.IsVerifiedCall));
+        Assert.Contains(indexed.Items, item => !item.IsVerifiedCall);
+        var reverse = await code.ExpandAsync(cold.Symbol.Id, true, default);
+        Assert.Equal(usage, Assert.Single(reverse.ProcedureUsages));
+    }
+
+    [Fact]
     public async Task ProcedurePathCapsReadsButPreservesWritesAndUnclassifiedDependencies()
     {
         var code = fixture.Code;
