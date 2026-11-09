@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using SourceTrail.Core.Contracts;
+using SourceTrail.Core;
 using SourceTrail.Core.Flow;
 using SourceTrail.Core.Models;
 using SourceTrail.Roslyn.Workspace;
@@ -20,6 +21,7 @@ internal static class Program
 
         using var host = builder.Build();
         var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
+        using var measurements = AnalysisTelemetry.Listen(message => startupLogger.LogInformation("{Measurement}", message));
         startupLogger.LogInformation("SourceTrail MCP starting.");
         await LoadConfiguredSolutionAsync(host, analysisOptions, startupLogger);
         await host.RunAsync();

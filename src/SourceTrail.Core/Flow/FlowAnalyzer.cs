@@ -6,7 +6,62 @@ namespace SourceTrail.Core.Flow;
 /// <summary>C# 호출과 SQL 참조를 연결하고 깊이·노드 제한 안에서 흐름을 탐색한다.</summary>
 public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
 {
-    public async Task<FlowResult> TraceCodeAsync(string symbol, int maxDepth, int maxNodes, CancellationToken cancellationToken)
+    public Task<FlowResult> TraceCodeAsync(string symbol, int maxDepth, int maxNodes, CancellationToken cancellationToken) =>
+        TraceCodeAsync(symbol, maxDepth, maxNodes, null, cancellationToken);
+
+    public async Task<ProcedurePathResult> TraceProcedurePathAsync(string symbol, string procedure, int maxDepth,
+        int maxNodes, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(procedure);
+        var targetId = ProcedureId(procedure.Trim());
+        var graph = await TraceCodeAsync(symbol, maxDepth, maxNodes, targetId, cancellationToken);
+        var entry = graph.Nodes[0];
+        var path = FindPath(graph, entry.Id, targetId, includeDispatch: false)
+            ?? FindPath(graph, entry.Id, targetId, includeDispatch: true);
+        var nodes = graph.Nodes.ToDictionary(node => node.Id);
+        var steps = path?.Select(edge => new ProcedurePathStep(nodes[edge.To].Name, edge.RelationType,
+            edge.Evidence, edge.File, edge.Line)).ToArray() ?? [];
+        var definition = await sql.AnalyzeAsync(procedure.Trim(), false, cancellationToken);
+        var dependencies = definition.Dependencies.Where(dependency => !IsReadDependency(dependency))
+            .Concat(definition.Dependencies.Where(IsReadDependency).Take(8)).ToArray();
+        var status = path is null ? "NotConnected" :
+            path.Any(edge => edge.RelationType == "DispatchCandidate") ? "Candidate" : "StaticPath";
+        return new(status, graph.SnapshotId, entry, procedure.Trim(), steps, graph.Truncated,
+            code.Status().Status, definition.Status, definition.SourcePath,
+            dependencies, definition.Dependencies.Count,
+            graph.Warnings.Count, definition.Warnings.Count, path is null
+                ? "No path found within the search bounds. Check WCF boundaries and adapter command mappings in source. SQL dependencies are independently analyzed."
+                : null);
+    }
+
+    private static bool IsReadDependency(SqlObject dependency) =>
+        dependency.Access is "Read" or "ReadCandidate";
+
+    private static IReadOnlyList<FlowEdge>? FindPath(FlowResult graph, string entry, string target, bool includeDispatch)
+    {
+        var outgoing = graph.Edges.Where(edge => includeDispatch || edge.RelationType != "DispatchCandidate")
+            .ToLookup(edge => edge.From);
+        var previous = new Dictionary<string, FlowEdge>();
+        var pending = new Queue<string>();
+        pending.Enqueue(entry);
+        while (pending.TryDequeue(out var node))
+        {
+            foreach (var edge in outgoing[node])
+            {
+                if (edge.To == entry || !previous.TryAdd(edge.To, edge)) continue;
+                if (edge.To != target) { pending.Enqueue(edge.To); continue; }
+                var path = new List<FlowEdge>();
+                for (var cursor = target; cursor != entry; cursor = previous[cursor].From)
+                    path.Add(previous[cursor]);
+                path.Reverse();
+                return path;
+            }
+        }
+        return null;
+    }
+
+    private async Task<FlowResult> TraceCodeAsync(string symbol, int maxDepth, int maxNodes, string? targetId,
+        CancellationToken cancellationToken)
     {
         ValidateLimits(maxDepth, maxNodes);
         var initial = await code.ExpandAsync(symbol, false, cancellationToken);
@@ -25,11 +80,12 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
             graph.AddAnalysisWarnings(expansion.Warnings);
             if (next.Depth >= maxDepth)
             {
-                if (expansion.Relations.Count > 0 || expansion.ProcedureUsages.Count > 0) graph.Truncated = true;
+                if (expansion.Relations.Count > 0 || expansion.ProcedureUsages.Any(usage =>
+                    targetId is null || ProcedureId(usage.Procedure) == targetId)) graph.Truncated = true;
                 continue;
             }
             AddForwardRelations(expansion, next.Depth, graph, pending);
-            await AddProcedureUsagesAsync(expansion, next.Depth, graph, cancellationToken);
+            await AddProcedureUsagesAsync(expansion, next.Depth, graph, targetId, cancellationToken);
         }
 
         AddForwardWarnings(graph);
@@ -51,14 +107,16 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
     }
 
     private async Task AddProcedureUsagesAsync(CodeExpansion expansion, int currentDepth,
-        TraversalState graph, CancellationToken cancellationToken)
+        TraversalState graph, string? targetId, CancellationToken cancellationToken)
     {
         foreach (var usage in expansion.ProcedureUsages)
         {
             string id = ProcedureId(usage.Procedure);
+            if (targetId is not null && id != targetId) continue;
             if (!graph.AddNode(new(id, usage.Procedure, "Procedure"))) continue;
             graph.Edges.Add(new(expansion.Symbol.Id, id, usage.RelationType, usage.Evidence, usage.File, usage.Line));
             if (usage.RelationType == "ProcedureCommandConfiguration") graph.Partial = true;
+            if (targetId is not null) continue;
             if (currentDepth + 1 >= graph.MaxDepth) { graph.Truncated = true; continue; }
             await TraceSqlDependenciesAsync(usage.Procedure, id, currentDepth + 1, graph, cancellationToken);
         }

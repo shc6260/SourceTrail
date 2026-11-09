@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using SourceTrail.Core.Contracts;
+using SourceTrail.Core;
 using SourceTrail.Core.Flow;
 using SourceTrail.Core.Models;
 
@@ -35,9 +36,9 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<Page<ReferenceInfo>> FindReferences(string symbol, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_references", () => code.ReferencesAsync(symbol, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "search_text", ReadOnly = true, Destructive = false), Description("Searches .cs/.config/.xml/.sql under the loaded solution and configured additional roots, excluding bin/obj/version-control folders. Results are text candidates only.")]
+    [McpServerTool(Name = "search_text", ReadOnly = true, Destructive = false), Description("Searches current disk files under the last loaded solution and additional roots, excluding bin/obj/version-control folders. Results are text candidates; snapshot metadata refers to the last semantic load.")]
     public Task<Page<TextMatch>> SearchText(string text, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
-        Run(cancellationToken, "search_text", () => code.SearchTextAsync(text, offset, limit ?? options.MaxResults, cancellationToken));
+        Run(cancellationToken, "search_text", () => code.SearchTextAsync(text, offset, limit ?? options.MaxResults, cancellationToken), requiresCode: false);
 
     [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Maps procedure string/constant candidates to containing Roslyn symbols and distinguishes configured calls from unverified candidates. Comments are not treated as calls.")]
     public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
@@ -45,7 +46,7 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
 
     [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Analyzes a procedure from the selected SQL source (SqlFiles or LiveDatabase). Returns provenance and direct dependencies; definition is opt-in. Does not execute SQL.")]
     public Task<ProcedureAnalysis> AnalyzeProcedure(string procedure, CancellationToken cancellationToken, bool includeDefinition = false) =>
-        Run(cancellationToken, "analyze_procedure", () => sql.AnalyzeAsync(procedure, includeDefinition, cancellationToken));
+        Run(cancellationToken, "analyze_procedure", () => sql.AnalyzeAsync(procedure, includeDefinition, cancellationToken), requiresCode: false);
 
     [McpServerTool(Name = "trace_code_to_database", ReadOnly = true, Destructive = false), Description("Traces resolved source invocations and recognized procedure usages forward to SQL metadata. Returns a bounded static graph with evidence.")]
     public Task<FlowResult> TraceCodeToDatabase(string symbol, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
@@ -55,14 +56,34 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<FlowResult> TraceProcedureToUi(string procedure, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
         Run(cancellationToken, "trace_procedure_to_ui", () => flow.TraceProcedureAsync(procedure, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken));
 
-    private async Task<T> Run<T>(CancellationToken cancellationToken, string tool, Func<Task<T>> operation)
+    [McpServerTool(Name = "trace_code_to_database_compact", ReadOnly = true, Destructive = false), Description("Same bounded static trace as trace_code_to_database, with lossless dictionary references for edges. SchemaVersion 1. Nodes retain exact symbol IDs; relation, evidence and file indexes are zero-based. No call sites or warnings are removed.")]
+    public Task<CompactFlowResult> TraceCodeToDatabaseCompact(string symbol, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
+        Run(cancellationToken, "trace_code_to_database_compact", async () =>
+            FlowCompactor.Compact(await flow.TraceCodeAsync(symbol, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken)));
+
+    [McpServerTool(Name = "trace_procedure_to_ui_compact", ReadOnly = true, Destructive = false), Description("Same bounded static trace as trace_procedure_to_ui, with lossless dictionary references for edges. SchemaVersion 1. Nodes retain exact symbol IDs; relation, evidence and file indexes are zero-based. Does not infer remote WCF implementations.")]
+    public Task<CompactFlowResult> TraceProcedureToUiCompact(string procedure, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
+        Run(cancellationToken, "trace_procedure_to_ui_compact", async () =>
+            FlowCompactor.Compact(await flow.TraceProcedureAsync(procedure, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken)));
+
+    [McpServerTool(Name = "trace_procedure_path", ReadOnly = true, Destructive = false), Description("Given an exact C# symbol ID and qualified procedure name, returns one bounded static path with call-site evidence. Direct SQL dependencies retain writes, executions and unclassified references; read-only entries are capped at eight. NotConnected keeps SQL evidence separate. Does not infer remote WCF dispatch or prove runtime execution.")]
+    public Task<ProcedurePathResult> TraceProcedurePath(string symbol, string procedure, CancellationToken cancellationToken,
+        int? maxDepth = null, int? maxNodes = null) =>
+        Run(cancellationToken, "trace_procedure_path", () => flow.TraceProcedurePathAsync(symbol, procedure,
+            maxDepth ?? options.MaxDepth, maxNodes ?? Math.Min(80, options.MaxNodes), cancellationToken));
+
+    private async Task<T> Run<T>(CancellationToken cancellationToken, string tool, Func<Task<T>> operation, bool requiresCode = true)
     {
-        await executionGate.WaitAsync(cancellationToken);
+        using (AnalysisTelemetry.Measure("tool.queue")) await executionGate.WaitAsync(cancellationToken);
         var timer = Stopwatch.StartNew();
         try
         {
-            if (tool is not "load_solution" and not "reload_solution" && code is IRefreshableCodeAnalyzer refreshable)
+            if (requiresCode && tool is not "load_solution" and not "reload_solution" && code is IRefreshableCodeAnalyzer refreshable)
+            {
+                using var freshness = AnalysisTelemetry.Measure("tool.code.freshness");
                 await refreshable.EnsureFreshAsync(cancellationToken);
+            }
+            using var analysis = AnalysisTelemetry.Measure("tool.operation");
             return await operation();
         }
         catch (Exception error)

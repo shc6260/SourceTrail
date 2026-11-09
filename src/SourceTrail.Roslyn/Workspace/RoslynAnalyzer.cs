@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using SourceTrail.Core;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -26,6 +27,9 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     private MSBuildWorkspace? _workspace;
     private Solution? _solution;
     private readonly Dictionary<string, (RSymbol Symbol, ProjectId Project)> _symbols = new();
+    private bool _symbolsReady;
+    // Internal progress hook enables deterministic cancellation regression tests.
+    internal Action? SymbolDocumentIndexed { get; set; }
     private readonly Dictionary<string, CodeExpansion> _expansions = new();
     private IReadOnlyList<ProcedureUsage>? _usages;
     private SolutionInputTracker _inputs = new();
@@ -48,8 +52,12 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             RegisterMsBuild();
             var diagnostics = new ConcurrentQueue<AnalysisDiagnostic>();
             pending = CreateWorkspace(diagnostics);
-            var solution = await pending.OpenSolutionAsync(path, cancellationToken: cancellationToken);
-            var projects = await CollectProjectDiagnosticsAsync(solution, diagnostics, cancellationToken);
+            Solution solution;
+            using (AnalysisTelemetry.Measure("code.workspace.open"))
+                solution = await pending.OpenSolutionAsync(path, cancellationToken: cancellationToken);
+            List<ProjectState> projects;
+            using (AnalysisTelemetry.Measure("code.compilation.diagnostics"))
+                projects = await CollectProjectDiagnosticsAsync(solution, diagnostics, cancellationToken);
             AddMissingProjectDiagnostics(path, solution, diagnostics);
             var collected = diagnostics.ToArray();
             var nextState = new SolutionState(collected.Any(d => d.Severity is "Failure" or "Error") || projects.Count == 0
@@ -234,8 +242,9 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
 
     private async Task EnsureUsagesAsync(CancellationToken cancellationToken)
     {
-        if (_usages is not null) return;
+        if (_usages is not null) { AnalysisTelemetry.CacheHit("procedure.usages"); return; }
         await EnsureSymbolsAsync(cancellationToken);
+        using var measurement = AnalysisTelemetry.Measure("code.usages.build");
         var usages = new List<ProcedureUsage>();
         foreach (var project in RequireSolution().Projects)
             foreach (var document in project.Documents)
@@ -265,7 +274,8 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             await EnsureUsagesAsync(cancellationToken);
             var selected = Resolve(symbol);
             string key = Id(selected.Symbol, selected.Project) + (callers ? ":in" : ":out");
-            if (_expansions.TryGetValue(key, out var cached)) return cached;
+            if (_expansions.TryGetValue(key, out var cached)) { AnalysisTelemetry.CacheHit("code.expansion"); return cached; }
+            using var measurement = AnalysisTelemetry.Measure(callers ? "code.expand.callers" : "code.expand.callees");
             var described = Describe(selected.Symbol, selected.Project);
             var relations = callers
                 ? await IncomingAsync(selected.Symbol, cancellationToken)
@@ -331,7 +341,9 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     private async Task EnsureSymbolsAsync(CancellationToken cancellationToken)
     {
         var solution = RequireSolution();
-        if (_symbols.Count > 0) return;
+        if (_symbolsReady) { AnalysisTelemetry.CacheHit("symbols"); return; }
+        using var measurement = AnalysisTelemetry.Measure("code.symbols.build");
+        var staged = new Dictionary<string, (RSymbol Symbol, ProjectId Project)>();
         foreach (var project in solution.Projects)
             foreach (var document in project.Documents)
             {
@@ -346,9 +358,15 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
                 {
                     var symbol = model.GetDeclaredSymbol(node, cancellationToken);
                     if (symbol is null) continue;
-                    _symbols.TryAdd(Id(symbol, project.Id), (symbol, project.Id));
+                    staged.TryAdd(Id(symbol, project.Id), (symbol, project.Id));
                 }
+                SymbolDocumentIndexed?.Invoke();
             }
+        cancellationToken.ThrowIfCancellationRequested();
+        // Publish only a complete index, including a successfully empty index.
+        _symbols.Clear();
+        foreach (var entry in staged) _symbols.Add(entry.Key, entry.Value);
+        _symbolsReady = true;
     }
 
     private (RSymbol Symbol, ProjectId Project) Resolve(string query)
@@ -447,6 +465,7 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         _workspace = workspace;
         _solution = solution;
         _symbols.Clear();
+        _symbolsReady = false;
         _expansions.Clear();
         _usages = null;
         _state = nextState;

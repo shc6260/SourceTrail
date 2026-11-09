@@ -17,7 +17,8 @@ public sealed class SolutionInputTracker
     public async Task<bool> ChangedAsync(SolutionState state, IEnumerable<string> extraInputs, CancellationToken token)
     {
         if (state.SolutionPath is null) return false;
-        var paths = CollectInputPaths(state, extraInputs);
+        HashSet<string> paths;
+        using (AnalysisTelemetry.Measure("code.input.enumerate")) paths = CollectInputPaths(state, extraInputs);
         var next = await ComputeFingerprintAsync(paths, token);
         bool changed = fingerprint is not null && fingerprint != next;
         fingerprint = next;
@@ -42,16 +43,26 @@ public sealed class SolutionInputTracker
     }
 
     // 경로 정렬과 내용 해시를 함께 사용해 추가·삭제 및 같은 크기의 수정도 구분한다.
-    private static async Task<string> ComputeFingerprintAsync(IEnumerable<string> paths, CancellationToken token)
+    internal static async Task<string> ComputeFingerprintAsync(IEnumerable<string> paths, CancellationToken token)
     {
+        using var measurement = AnalysisTelemetry.Measure("code.input.hash");
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        long files = 0, bytes = 0;
         foreach (var path in paths.Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
             hash.AppendData(Encoding.UTF8.GetBytes(path));
-            if (File.Exists(path)) hash.AppendData(SHA256.HashData(await File.ReadAllBytesAsync(path, token)));
+            if (File.Exists(path))
+            {
+                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                hash.AppendData(await SHA256.HashDataAsync(stream, token));
+                files++;
+                bytes += stream.Length;
+            }
             else hash.AppendData([0]);
         }
+        AnalysisTelemetry.InputRead(files, bytes);
         return Convert.ToHexString(hash.GetHashAndReset());
     }
 

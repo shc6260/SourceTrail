@@ -12,5 +12,6 @@
     <ProjectReference Include="../../src/SourceTrail.Core/SourceTrail.Core.csproj" />
     <ProjectReference Include="../../src/SourceTrail.Roslyn/SourceTrail.Roslyn.csproj" />
     <ProjectReference Include="../../src/SourceTrail.SqlServer/SourceTrail.SqlServer.csproj" />
+    <ProjectReference Include="../../src/SourceTrail.Mcp/SourceTrail.Mcp.csproj" />
   </ItemGroup>
 </Project>

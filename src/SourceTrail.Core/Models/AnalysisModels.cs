@@ -37,6 +37,12 @@ public sealed record FlowResult(string Status, string Direction, string? Snapsho
     IReadOnlyList<FlowNode> Nodes, IReadOnlyList<FlowEdge> Edges, bool Truncated,
     IReadOnlyList<string> Warnings);
 
+public sealed record ProcedurePathStep(string Target, string RelationType, string Evidence, string? File, int? Line);
+public sealed record ProcedurePathResult(string PathStatus, string? SnapshotId, FlowNode Entry,
+    string Procedure, IReadOnlyList<ProcedurePathStep> Steps, bool SearchTruncated, string CodeStatus,
+    string SqlStatus, string? SqlFile, IReadOnlyList<SqlObject> DirectDependencies, int DependencyCount,
+    int CodeWarningCount, int SqlWarningCount, string? Gap);
+
 public sealed class AnalysisOptions
 {
     public string SolutionPath { get; set; } = "";

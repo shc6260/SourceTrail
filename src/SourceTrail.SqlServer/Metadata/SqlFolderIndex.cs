@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using SourceTrail.Core;
 using System.Text;
 using System.Text.Json;
 using SourceTrail.Core.Models;
@@ -21,6 +22,7 @@ public sealed class SqlFolderIndex(DatabaseOptions options) : IDisposable
     public IEnumerable<SqlFileObject> Objects => objects;
     public async Task<SqlSourceState> LoadAsync(string folder, CancellationToken token)
     {
+        using var measurement = AnalysisTelemetry.Measure("sql.files.reconcile");
         if (!Path.IsPathFullyQualified(folder) || !Directory.Exists(folder)) throw new ArgumentException("Provide an existing absolute SQL folder.");
         folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
         var warnings = new List<string>();
