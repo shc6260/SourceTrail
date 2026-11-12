@@ -26,6 +26,17 @@ public sealed record CodeRelation(SymbolInfo From, SymbolInfo To, string Relatio
     string File, int Line, string Evidence);
 public sealed record CodeExpansion(SymbolInfo Symbol, IReadOnlyList<CodeRelation> Relations,
     IReadOnlyList<ProcedureUsage> ProcedureUsages, IReadOnlyList<string> Warnings);
+public sealed record DatabaseCallSite(string Method, string File, int Line);
+public sealed record DatabaseCall(string Kind, IReadOnlyList<string> Targets, string Execution,
+    DatabaseCallSite Site, IReadOnlyList<DatabaseCallSite> Path, string? Condition = null);
+public sealed record DatabaseCallSummary(string Status, string? SnapshotId, DatabaseCallSite Entry,
+    IReadOnlyList<DatabaseCall> Calls, IReadOnlyList<DatabaseCallSite> Unresolved, int MethodsVisited,
+    bool Truncated, int DiagnosticCount);
+public sealed record CompactDatabaseCall(string Kind, IReadOnlyList<string> Targets, string Execution,
+    int[] Site, IReadOnlyList<int[]> Via, string? Condition);
+public sealed record CompactDatabaseCallSummary(string Status, string? SnapshotId, string? SolutionRoot,
+    IReadOnlyList<string> Files, int[] Entry, IReadOnlyList<CompactDatabaseCall> Calls,
+    IReadOnlyList<int[]> Unresolved, int MethodsVisited, bool Truncated, int DiagnosticCount);
 public sealed record SqlObject(string? Server, string? Database, string? Schema, string Name,
     string Kind, string Access, bool Resolved, bool CallerDependent, bool Ambiguous, string? File = null, int? Line = null);
 public sealed record ProcedureAnalysis(string Status, string Procedure, string? Schema,

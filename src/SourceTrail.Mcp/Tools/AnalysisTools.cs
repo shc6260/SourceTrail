@@ -56,6 +56,34 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<ProcedureAnalysis> AnalyzeProcedure(string procedure, CancellationToken cancellationToken, bool includeDefinition = false) =>
         Run(cancellationToken, "analyze_procedure", () => sql.AnalyzeAsync(procedure, includeDefinition, cancellationToken), requiresCode: false);
 
+    [McpServerTool(Name = "find_database_calls", ReadOnly = true, Destructive = false), Description("From one C# method, returns source-proven SQL execution sites and target names. Use a qualified method name or exact symbol ID. Locations are [zero-based index into files, one-based line]; relative paths are under solutionRoot. One static path per discovered method; unresolved sites and traversal limits are reported. Does not access the database.")]
+    public Task<CompactDatabaseCallSummary> FindDatabaseCalls(string symbol, CancellationToken cancellationToken,
+        int maxDepth = 3, int maxMethods = 32) =>
+        Run(cancellationToken, "find_database_calls", async () =>
+        {
+            var result = await ((IDatabaseCallAnalyzer)code)
+                .FindDatabaseCallsAsync(symbol, maxDepth, maxMethods, cancellationToken);
+            var root = Path.GetDirectoryName(code.Status().SolutionPath);
+            var files = new List<string>();
+            var indexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            int[] Location(DatabaseCallSite site)
+            {
+                if (!indexes.TryGetValue(site.File, out int index))
+                {
+                    indexes[site.File] = index = files.Count;
+                    var relative = root is null ? site.File : Path.GetRelativePath(root, site.File);
+                    files.Add(relative.StartsWith("..", StringComparison.Ordinal) ? site.File : relative);
+                }
+                return [index, site.Line];
+            }
+            var entry = Location(result.Entry);
+            var calls = result.Calls.Select(call => new CompactDatabaseCall(call.Kind, call.Targets, call.Execution,
+                Location(call.Site), call.Path.Select(Location).ToArray(), call.Condition)).ToArray();
+            var unresolved = result.Unresolved.Select(Location).ToArray();
+            return new CompactDatabaseCallSummary(result.Status, result.SnapshotId, root, files, entry,
+                calls, unresolved, result.MethodsVisited, result.Truncated, result.DiagnosticCount);
+        });
+
     [McpServerTool(Name = "trace_code_to_database", ReadOnly = true, Destructive = false), Description("Traces resolved source invocations and recognized procedure usages forward to SQL metadata. Returns a bounded static graph with evidence.")]
     public Task<FlowResult> TraceCodeToDatabase(string symbol, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
         Run(cancellationToken, "trace_code_to_database", () => flow.TraceCodeAsync(symbol, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken));

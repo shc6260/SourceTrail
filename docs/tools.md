@@ -38,6 +38,7 @@
 | trace_procedure_path | `{"symbol":"<exact symbol id>","procedure":"dbo.usp_TestSave"}` |
 | find_procedure_usage | `{"procedure":"dbo.usp_TestSave"}` |
 | analyze_procedure | `{"procedure":"dbo.usp_TestSave","includeDefinition":false}` |
+| find_database_calls | `{"symbol":"Demo.Data.SaveService.Save","maxDepth":3,"maxMethods":32}` |
 | trace_code_to_database | `{"symbol":"선택한 메서드 ID","maxDepth":5,"maxNodes":200}` |
 | trace_procedure_to_ui | `{"procedure":"dbo.usp_TestSave","maxDepth":5,"maxNodes":200}` |
 
@@ -75,3 +76,5 @@ get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다.
 모호한 C# 이름은 오류와 함께 정확한 심볼 ID 선택을 요청합니다. 재로딩하면 ID와 캐시가 바뀝니다. 코드와 배포된 DB 정의가 같은 버전인지 별도 확인해야 합니다.
 
 NotFoundInProvidedFiles는 제공된 SQL 파일에 없는 상태이며 실제 DB 부재를 의미하지 않습니다. [자료 선택·캐시·갱신](sql-sources.md)을 참고하세요.
+
+`find_database_calls`는 메서드에서 도달할 수 있는 정적 SQL 실행 근거를 요약합니다. 생성 TableAdapter의 저장 명령, 상수가 확정된 직접 DB 명령, 등록된 프로시저 래퍼를 반환합니다. `site`, `via`, `unresolved`의 위치는 `[files의 0 기반 인덱스, 1 기반 줄 번호]`입니다. 상대 경로는 `solutionRoot`를 기준으로 합니다. 메서드별 한 경로를 유지하며, 실행 대상을 해석하지 못한 위치와 탐색 한도는 응답에 표시합니다.

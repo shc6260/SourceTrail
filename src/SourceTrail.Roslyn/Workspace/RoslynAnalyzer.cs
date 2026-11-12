@@ -17,7 +17,8 @@ using RSymbol = Microsoft.CodeAnalysis.ISymbol;
 namespace SourceTrail.Roslyn.Workspace;
 
 /// <summary>C# 솔루션의 분석 상태를 유지하고 심볼·참조·호출 근거를 제공한다.</summary>
-public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null) : ICodeAnalyzer, IRefreshableCodeAnalyzer
+public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null)
+    : ICodeAnalyzer, IRefreshableCodeAnalyzer, IDatabaseCallAnalyzer
 {
     private readonly AnalysisOptions _options = options ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -100,6 +101,7 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
             Solution solution;
             using (AnalysisTelemetry.Measure("code.workspace.open"))
                 solution = await pending.OpenSolutionAsync(path, cancellationToken: cancellationToken);
+            solution = RemoveDuplicateDocuments(solution);
             List<ProjectState> projects;
             using (AnalysisTelemetry.Measure("code.compilation.diagnostics"))
                 projects = await CollectProjectDiagnosticsAsync(solution, diagnostics, cancellationToken);
@@ -130,6 +132,18 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
             return _state;
         }
         finally { pending?.Dispose(); }
+    }
+
+    private static Solution RemoveDuplicateDocuments(Solution solution)
+    {
+        var duplicates = solution.Projects.SelectMany(project => project.Documents
+            .Where(document => document.FilePath is not null)
+            .GroupBy(document => Path.GetFullPath(document.FilePath!), StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group => group.Skip(1))
+            .Select(document => document.Id)).ToArray();
+        foreach (var duplicate in duplicates)
+            solution = solution.RemoveDocument(duplicate);
+        return solution;
     }
 
     private IEnumerable<string> InputPaths(Solution? solution = null) => (solution ?? _solution)?.Projects.SelectMany(p =>

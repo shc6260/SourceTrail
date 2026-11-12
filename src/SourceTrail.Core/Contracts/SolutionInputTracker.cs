@@ -111,13 +111,13 @@ public sealed class SolutionInputTracker
         var pending = new Stack<string>(); if (Directory.Exists(root)) pending.Push(root);
         while (pending.TryPop(out var directory))
         {
-            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos())
             {
-                var attr = File.GetAttributes(entry);
+                var attr = entry.Attributes;
                 if (attr.HasFlag(FileAttributes.ReparsePoint)) continue;
                 if (attr.HasFlag(FileAttributes.Directory))
-                { if (Path.GetFileName(entry) is not "bin" and not "obj" and not ".git" and not ".svn" and not ".vs" and not "node_modules") pending.Push(entry); }
-                else if (Path.GetExtension(entry).ToLowerInvariant() is ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".svc" or ".config" or ".json" or ".dll") paths.Add(entry);
+                { if (entry.Name is not "bin" and not "obj" and not ".git" and not ".svn" and not ".vs" and not "node_modules") pending.Push(entry.FullName); }
+                else if (entry.Extension.ToLowerInvariant() is ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".svc" or ".config" or ".json" or ".dll") paths.Add(entry.FullName);
             }
         }
     }

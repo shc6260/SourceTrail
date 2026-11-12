@@ -41,6 +41,25 @@ public sealed class AnalysisTests(LoadedSolution fixture)
     }
 
     [Fact]
+    public async Task DatabaseCallsReturnExecutionSitesAndLeaveDynamicTargetsUnresolved()
+    {
+        var result = await _code.FindDatabaseCallsAsync("Demo.Data.DatabaseCalls.Save", 3, 32, Token);
+        Assert.Contains(result.Calls, call => call.Kind == "SqlText" &&
+            call.Targets.SequenceEqual(["dbo.InfoPatient"]) && call.Execution == "ExecuteReader" &&
+            Assert.Single(call.Path).Method.Contains("DatabaseCalls.Save"));
+        Assert.Contains(result.Calls, call => call.Kind == "TableAdapterProcedure" &&
+            call.Targets.SequenceEqual(["dbo.usp_SaveFixture"]) && call.Condition!.Contains("Modified rows"));
+        Assert.Contains(result.Calls, call => call.Kind == "DirectProcedure" &&
+            call.Targets.SequenceEqual(["dbo.usp_ClearFixture"]) && call.Execution == "ExecuteNonQuery");
+        Assert.DoesNotContain(result.Calls, call => call.Targets.Contains("dbo.usp_UnusedFixture"));
+        Assert.Single(result.Unresolved);
+        Assert.Equal("Partial", result.Status);
+        var bounded = await _code.FindDatabaseCallsAsync("Demo.Data.DatabaseCalls.Save", 0, 32, Token);
+        Assert.True(bounded.Truncated);
+        Assert.DoesNotContain(bounded.Calls, call => call.Kind == "SqlText");
+    }
+
+    [Fact]
     public async Task ScopedTextSearchLimitsTheScanToSolutionFolderAndExtension()
     {
         var matches = await _code.SearchTextAsync("namespace Demo", 0, 100, Token, "Demo.UI", ".cs");

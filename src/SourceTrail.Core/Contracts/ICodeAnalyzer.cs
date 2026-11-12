@@ -22,3 +22,9 @@ public interface IProcedureAnalyzer
 {
     Task<ProcedureAnalysis> AnalyzeAsync(string procedure, bool includeDefinition, CancellationToken cancellationToken);
 }
+
+public interface IDatabaseCallAnalyzer
+{
+    Task<DatabaseCallSummary> FindDatabaseCallsAsync(string symbol, int maxDepth, int maxMethods,
+        CancellationToken cancellationToken);
+}
