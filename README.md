@@ -1,91 +1,41 @@
 # SourceTrail MCP
 
-C# 솔루션의 화면·메서드·프로시저·SQL 객체 관계를 추적하는 공용 읽기 전용 MCP 서버입니다. UI 없이 stdio로 실행하며, 분석할 솔루션 경로는 도구 입력 또는 외부 설정으로 지정합니다.
+C# WinForms의 화면·이벤트에서 메서드와 DB 호출을 찾고, SQL Server 스크립트에서 객체 정의와 참조를 확인하는 읽기 전용 MCP 서버입니다. 로컬에서 stdio로 실행하며 분석 근거를 파일과 줄 번호로 반환합니다.
 
-## 구현 상태
+## 설치 및 등록
 
-- 솔루션 로딩·상태 조회·재로딩
-- Roslyn 심볼 검색·구조 조회·참조 검색
-- 문자열 검색 및 프로시저 문자열/상수 → 포함 심볼 연결
-- 설정된 DB 호출 래퍼의 프로시저 인자 판별
-- SQL 폴더 / 실제 DB 모드 선택, 개체 정의·참조 분석
-- 코드→DB / 프로시저→호출자·WinForms 이벤트 역추적
-- SQL 디스크 캐시·변경 갱신, C# 메모리 캐시·입력 변경 대조, 깊이·노드 제한
-- 자동 테스트 및 MCP stdio 도구(기존 16개, compact 추적 2개, 대상 프로시저 경로 추적 1개)
+Windows에서 .NET 10 SDK가 필요합니다. 레거시 C# 솔루션을 의미 분석하려면 해당 프로젝트의 참조 어셈블리, 외부 DLL 및 MSBuild targets도 준비되어 있어야 합니다.
 
-실제 .NET Framework 4.6.2 업무 솔루션 및 운영 DB는 아직 검증하지 않았습니다. 원격 WCF 계약→서버 구현 자동 연결과 동적 SQL 분석은 지원하지 않습니다. 인터페이스 구현 후보는 실제 실행 대상으로 확정하지 않습니다.
+저장소 루트에서 실행합니다.
 
-## 설치 및 빌드
+```powershell
+dotnet publish src/SourceTrail.Mcp/SourceTrail.Mcp.csproj -c Release -o artifacts/server
+```
 
-.NET 10 SDK가 필요합니다. 분석 대상 프로젝트의 프레임워크는 변경하지 않습니다.
+MCP 클라이언트에 명령을 `dotnet`, 인자를 `artifacts/server/SourceTrail.Mcp.dll`의 **절대 경로**로 등록합니다. Roslyn BuildHost를 함께 사용하므로 publish 폴더 전체를 보관하세요. Codex의 복사 가능한 설정과 연결 확인 순서는 [Codex 등록 및 설정](docs/codex-registration.md)에 있습니다.
+
+## 처음 사용하는 방법
+
+1. MCP에서 `ping`을 호출해 `pong`을 확인합니다.
+2. 의미 분석용 솔루션은 `load_solution`에 절대 `.sln` 경로를 전달하거나 시작 설정에 지정합니다. 시작 설정이 있으면 `find_ui_actions`와 `search_text`는 의미 분석 작업 공간을 열기 전에 실행할 수 있습니다.
+3. SQL 스크립트를 쓸 때는 `select_database_source`에서 `SqlFiles`와 절대 폴더 경로를 지정합니다. 반복 사용 시 시작 설정으로 등록할 수 있습니다.
+4. 화면을 모를 때는 “접수 저장 로직을 찾아줘. 화면 이벤트, 서비스 호출, DB 실행 위치를 파일과 줄로 보여줘”처럼 요청합니다. 첫 후보의 이벤트와 본문을 확인하고, 서비스·DB·SQL 도구는 확인된 이름이 있을 때 사용합니다.
+
+[도구 선택과 예제](docs/tools.md) · [구조와 동작 원리](docs/architecture.md) · [SQL 자료와 캐시](docs/sql-sources.md) · [지원 범위와 제한](docs/limitations.md)
+
+## 연결 후 확인할 것
+
+- `get_analysis_status`와 `get_database_status`에서 분석 대상과 진단을 확인합니다. 시작 경로만 지정한 직후에는 첫 사용 전이라 `NotLoaded`일 수 있습니다.
+- UI 후보, 정적으로 연결된 호출, 실행 대상이 미확정인 후보를 구분합니다. `Partial`, `truncated`, 빈 결과는 원문 확인이 필요한 지점입니다.
+- 운영 DB 접속정보, 실제 업무 소스, 로컬 설정·캐시와 분석 결과는 로컬에서 관리합니다.
+
+## 개발 검증
 
 ```powershell
 dotnet restore SourceTrail.sln
-dotnet build SourceTrail.sln --no-restore
-```
-
-## 실행
-
-빌드 후 DLL을 직접 실행합니다. 프로세스는 MCP 요청을 기다립니다.
-
-```powershell
-dotnet src/SourceTrail.Mcp/bin/Debug/net10.0/SourceTrail.Mcp.dll
-```
-
-배포 시에는 `dotnet publish src/SourceTrail.Mcp -c Release -o artifacts/server`로 서버와 Roslyn BuildHost를 함께 배포합니다. 로그는 stderr에 출력합니다. C# 분석 요청 전에 입력 변경을 대조하고 변경 시 재로딩합니다. SQL 파일은 변경 감지 및 주기적 대조로 갱신합니다.
-
-## 설정
-
-`appsettings.example.json`을 복사해 실행 DLL 옆의 `appsettings.json`으로 저장하거나 환경변수를 사용합니다. 실제 설정 파일은 Git에서 제외됩니다.
-
-- `Analysis__SolutionPath`: 선택적 시작 솔루션 경로. 기본은 빈 값이며 `load_solution`으로 명시적 로딩.
-- `Database__Mode`: `SqlFiles` 또는 `LiveDatabase`(기본).
-- `Database__SqlFolder`: SQL 파일 모드의 절대 폴더 경로.
-- `Database__CacheDirectory`: SQL 캐시 폴더. 빈 값이면 사용자 LocalAppData 아래 사용.
-- `Database__WatchFiles`: SQL 파일 변경 감지 여부(기본 true).
-- `Database__ConnectionString`: DB 직접 조회 모드의 SQL Server 연결 문자열.
-- `Analysis__MaxDepth`: 기본 5, 도구 입력 허용 범위 0..20.
-- `Analysis__MaxNodes`: 기본 200, 도구 입력 허용 범위 1..2000.
-- `Analysis__MaxResults`: 기본 100, 검색 limit 허용 범위 1..1000.
-- `Analysis__AdditionalSearchRoots__0`: 추가 문자열 검색 루트.
-- `Analysis__ProcedureCallRules__0__TypeName`: DB 래퍼 타입의 전체 이름.
-- `Analysis__ProcedureCallRules__0__MethodName`: DB 래퍼 메서드명.
-- `Analysis__ProcedureCallRules__0__ArgumentIndex`: 선언된 매개변수의 0 기반 인덱스.
-
-DB 래퍼 계약은 사용자 설정을 근거로 합니다. 메서드 이름만 보고 DB 실행을 추측하지 않습니다. 테스트 예제 설정은 `docs/settings.demo.example.json`에 있습니다. 테스트용 Db는 DB에 연결하지 않는 빈 구현입니다.
-
-DB 계정에는 필요한 메타데이터 조회 권한만 부여합니다. 도구는 고정된 메타데이터 SELECT만 실행하고 업무 프로시저를 실행하지 않습니다. DB 미설정·실패 시에도 C# 분석은 사용 가능합니다.
-
-## 사용 순서
-
-1. `load_solution`에 절대 `.sln` 경로 전달.
-2. `find_symbol`에서 후보의 `id` 선택.
-3. 선택한 ID로 구조·참조·흐름 조회.
-4. 디스크의 소스가 변경되면 `reload_solution` 호출 후 새 ID 사용.
-
-```json
-{"solutionPath":"D:\\Projects\\Sample\\Sample.sln"}
-```
-
-도구별 상세 예제는 [tools.md](docs/tools.md), Codex 등록 예제는 [codex-registration.md](docs/codex-registration.md)를 참고하세요.
-
-## 검증
-
-가상 WinForms 솔루션과 의도적으로 컴파일 오류가 있는 부분 로딩 테스트 솔루션을 사용합니다.
-
-```powershell
 dotnet restore tests/Fixtures/Demo/Demo.sln
 dotnet restore tests/Fixtures/Broken/Broken.sln
 dotnet test SourceTrail.sln --no-restore
-powershell -NoProfile -File scripts/Smoke-Mcp.ps1
 ```
 
-테스트 범위: 오버로드/모호한 이름, 실제 참조와 호출 구분, 이벤트 등록, 인터페이스 구현 후보, 프로시저 상수, 주석, 미등록 문자열, 순환호출, 깊이·노드 제한, DB 미설정·연결 실패, 부분 로딩, 재로딩. SQL 의존성 조합 테스트는 모의 데이터이며 실제 DB 검증과 구분합니다.
-
-## 제한사항
-
-[limitations.md](docs/limitations.md)에 지원 범위를 기록합니다. `Ready`는 지원되는 정적 분석 범위의 상태이며 운영 실행·저장 성공을 뜻하지 않습니다. 전체 소스 body는 반환하지 않습니다.
-
-실제 업무 소스, 내부 접속정보, 분석 결과와 로그는 커밋하지 않습니다. GitHub 업로드 및 라이선스 선택은 아직 진행하지 않았습니다.
-
-SQL 입력 선택과 지원 범위: [SQL 자료와 캐시](docs/sql-sources.md).
+가상 WinForms와 오류가 있는 프로젝트로 화면 검색, 정적 호출, SQL 파일 분석, 부분 로딩 및 갱신을 검증합니다. 실제 SQL Server 연결은 환경별로 확인하세요.

@@ -1,5 +1,19 @@
 # 도구별 예제
 
+## 조사 순서
+
+1. **화면을 모를 때**는 업무 문장을 `find_ui_actions`에 전달합니다. 상위 후보의 화면·버튼 문구, 이벤트 구독, 핸들러 줄을 확인합니다. 0건이거나 다른 동작이 잡히면 실제 화면 제목이나 메뉴 문구로 다시 찾고, 폼 파일이 확인되면 `find_event_handlers` 또는 Designer 원문에서 이벤트를 확인합니다.
+2. **서비스를 호출하면** 핸들러 본문에서 호출 이름을 읽고, `search_text`의 `directory`와 `extension`으로 서버 소스 범위를 좁힙니다. WCF는 계약, 서버 구현, 필요한 경우 서비스 호스트 설정을 대조합니다. 동명 메서드나 프록시의 `Async` 이름만으로 구현을 확정하지 않습니다.
+3. **DB 실행 위치를 찾을 때**는 확인된 메서드 전체 이름이나 정확한 심볼 ID를 `find_database_calls`에 전달합니다. `FillBy` 조회는 어댑터의 SelectCommand 및 프로시저 매핑을 원문에서 대조합니다. `unresolved`와 `truncated`가 있으면 누락 범위를 표시합니다.
+4. **프로시저 이름이 확인되면** `SqlFiles`에서 `find_sql_object`로 파일·줄을 찾습니다. 이름 부분 일치 검색이므로 반환된 스키마와 이름을 대조합니다. 직접 의존관계나 실제 DB의 정의가 필요하면 `analyze_procedure`를 사용합니다.
+5. **영향 범위를 조사할 때**는 `find_references`, `find_procedure_usage`, `trace_procedure_to_ui`를 사용합니다. 정적 호출, 문자열·구현 후보, 확인 필요 경로를 나누어 파일·줄을 표시합니다.
+
+복사해서 사용할 요청 예제입니다.
+
+> 접수 저장 로직을 찾아줘. 먼저 화면과 저장 이벤트를 찾고, 확인된 호출명을 기준으로 WCF 서버 구현과 DB 실행 위치를 확인해줘. 프로시저 이름을 찾으면 SQL 정의의 파일·줄도 보여줘. 확인한 연결과 확인이 필요한 구간을 구분해줘.
+
+업무 소스 없이 UI 검색을 확인하려면 `tests/Fixtures/Demo/Demo.sln`의 절대 경로를 시작 설정에 지정하거나 `load_solution`으로 선택한 뒤, `find_ui_actions`에 `{"query":"재고 저장 찾아줘","limit":5}`를 전달합니다. `Demo.UI.DesignerTestForm`의 `SaveClicked`와 `SaveData` 호출 근거를 확인할 수 있습니다. DB 호출 검색을 별도로 확인하려면 같은 솔루션에서 `find_database_calls`에 `{"symbol":"Demo.Data.DatabaseCalls.Save"}`를 전달합니다.
+
 ## 선택형 compact 추적
 
 - `trace_code_to_database_compact`: 일반 forward trace와 같은 입력(`symbol`, `maxDepth`, `maxNodes`).
@@ -17,9 +31,9 @@
 - SourceTrail.Analysis Meter는 단계별 ms, 입력 파일/바이트 수, 캐시 적중을 제공합니다. 호스트는 단계 시간과 입력 통계를 stderr 로그에 기록합니다. 캐시 적중은 exporter용 지표로 유지하고 노드마다 로그를 출력하지 않습니다. 로그에는 소스 본문·연결 정보가 포함되지 않습니다.
 - queue 시간과 operation/freshness 시간은 분리됩니다. 단계는 중첩될 수 있으므로 duration을 단순 합산하지 마세요. 실제 MCP 응답 직렬화·네트워크·클라이언트 렌더링 시간은 해당 단계 로그에 포함되지 않습니다.
 
-## 기존 도구
+## 도구 입력 예제
 
-모든 도구는 읽기 전용입니다. 페이지 조회 도구는 offset(기본 0), limit(기본 100, 최대 1000)을 받으며 items/total/truncated/snapshotId/warnings를 반환합니다. 줄 번호는 1부터 시작합니다. source body는 반환하지 않습니다.
+모든 도구는 원본 소스와 DB에 읽기 전용입니다. 일반 페이지 조회 도구는 `offset`과 `limit`을 받습니다. `find_ui_actions`의 `limit`은 1~20이며 기본값은 5입니다. 줄 번호는 1부터 시작합니다. C# 전체 본문은 원문에서 읽고 SQL 정의는 지원 도구에서 `includeDefinition`으로 요청합니다.
 
 | 도구 | 입력 예제 |
 |---|---|
@@ -35,6 +49,7 @@
 | get_symbol_overview | `{"symbol":"find_symbol에서 반환한 타입 ID"}` |
 | find_references | `{"symbol":"선택한 심볼 ID"}` |
 | search_text | `{"text":"usp_TestSave"}` |
+| find_event_handlers | `{"file":"D:\\Projects\\Sample\\UI\\SampleForm.cs","query":"Save"}` |
 | find_ui_actions | `{"query":"접수 저장","limit":5}` |
 | trace_procedure_path | `{"symbol":"<exact symbol id>","procedure":"dbo.usp_TestSave"}` |
 | find_procedure_usage | `{"procedure":"dbo.usp_TestSave"}` |
@@ -62,11 +77,11 @@ get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다.
 
 정방향 추적은 탐색 중인 심볼의 선언 문서에서 등록된 DB 래퍼 호출을 확인합니다. 전체 솔루션의 문자열 후보가 필요한 경우 `find_procedure_usage`를 사용합니다.
 
-`trace_procedure_path`는 지정 프로시저로 이어지는 경로 한 개를 반환합니다. 일반 정적 연결을 우선하고, 구현 후보를 경유하면 `Candidate`로 표시합니다. `NotConnected`는 탐색 범위에서 연결을 찾지 못했다는 뜻입니다. SQL 직접 의존관계는 연결 여부와 별도로 반환합니다. 변경 후보, 실행 참조, 분류 미확정 항목을 먼저 보존하며 `Read`와 `ReadCandidate`만 최대 8개로 제한합니다. 전체 개수는 `dependencyCount`에 표시하고 각 항목의 분류와 확인 상태는 그대로 유지합니다. 전체 그래프, 경고 전문, SQL 본문은 기존 도구에서 조회할 수 있습니다. WCF 원격 구현 추론과 런타임 실행 검증은 하지 않습니다.
+`trace_procedure_path`는 지정 프로시저로 이어지는 경로 한 개를 반환합니다. 일반 정적 연결을 우선하고, 필요하면 WCF 호스트 후보부터 별도 한도로 탐색합니다. 구현 후보를 경유하면 `Candidate`로 표시합니다. `NotConnected`는 탐색 범위에서 연결을 찾지 못했다는 뜻입니다. SQL 직접 의존관계는 연결 여부와 별도로 반환합니다. 변경 후보, 실행 참조, 분류 미확정 항목을 보존하며 `Read`와 `ReadCandidate`만 최대 8개로 제한합니다. 전체 개수는 `dependencyCount`에 표시합니다.
 
 ## 실패·제한 상태
 
-- NotLoaded: load_solution 호출 전.
+- NotLoaded: C# 작업 공간 또는 SQL 파일 색인이 아직 로드되지 않은 상태.
 - Partial: 일부 프로젝트 오류, 구현 후보, DB 미설정/실패, 탐색 제한 등.
 - NotConfigured: DB 연결 미설정.
 - Unavailable: DB 연결/조회 실패.
