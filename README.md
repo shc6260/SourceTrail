@@ -2,6 +2,14 @@
 
 C# WinForms의 화면·이벤트에서 메서드와 DB 호출을 찾고, SQL Server 스크립트에서 객체 정의와 참조를 확인하는 읽기 전용 MCP 서버입니다. 로컬에서 stdio로 실행하며 분석 근거를 파일과 줄 번호로 반환합니다.
 
+## 문서 바로가기
+
+- [설치·Codex 설정](docs/codex-registration.md) — 등록 예제, 기본 솔루션·SQL 폴더 설정, 연결 확인
+- [사용법과 요청 예제](docs/tools.md) — 화면 이벤트에서 WCF·DB 호출·SQL 정의까지 조사하는 순서
+- [구조와 동작 원리](docs/architecture.md) — 화면 검색, Roslyn 의미 분석, 디스크 캐시
+- [SQL 자료와 캐시](docs/sql-sources.md) — SQL 파일 모드와 실제 DB 모드 설정 및 갱신
+- [지원 범위와 제한](docs/limitations.md) — WCF·TableAdapter 등 원문 확인이 필요한 경우
+
 ## 설치 및 등록
 
 Windows에서 .NET 10 SDK가 필요합니다. 레거시 C# 솔루션을 의미 분석하려면 해당 프로젝트의 참조 어셈블리, 외부 DLL 및 MSBuild targets도 준비되어 있어야 합니다.
@@ -20,8 +28,6 @@ MCP 클라이언트에 명령을 `dotnet`, 인자를 `artifacts/server/SourceTra
 2. 의미 분석용 솔루션은 `load_solution`에 절대 `.sln` 경로를 전달하거나 시작 설정에 지정합니다. 시작 설정이 있으면 `find_ui_actions`와 `search_text`는 의미 분석 작업 공간을 열기 전에 실행할 수 있습니다.
 3. SQL 스크립트를 쓸 때는 `select_database_source`에서 `SqlFiles`와 절대 폴더 경로를 지정합니다. 반복 사용 시 시작 설정으로 등록할 수 있습니다.
 4. 화면을 모를 때는 “접수 저장 로직을 찾아줘. 화면 이벤트, 서비스 호출, DB 실행 위치를 파일과 줄로 보여줘”처럼 요청합니다. 첫 후보의 이벤트와 본문을 확인하고, 서비스·DB·SQL 도구는 확인된 이름이 있을 때 사용합니다.
-
-[도구 선택과 예제](docs/tools.md) · [구조와 동작 원리](docs/architecture.md) · [SQL 자료와 캐시](docs/sql-sources.md) · [지원 범위와 제한](docs/limitations.md)
 
 ## 연결 후 확인할 것
 
