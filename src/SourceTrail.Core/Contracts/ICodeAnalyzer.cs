@@ -28,3 +28,8 @@ public interface IDatabaseCallAnalyzer
     Task<DatabaseCallSummary> FindDatabaseCallsAsync(string symbol, int maxDepth, int maxMethods,
         CancellationToken cancellationToken);
 }
+
+public interface IUiActionAnalyzer
+{
+    Task<UiActionSearchResult> FindUiActionsAsync(string query, int limit, CancellationToken cancellationToken);
+}

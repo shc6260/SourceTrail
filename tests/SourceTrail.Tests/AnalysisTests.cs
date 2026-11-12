@@ -41,6 +41,30 @@ public sealed class AnalysisTests(LoadedSolution fixture)
     }
 
     [Fact]
+    public async Task UiActionSearchJoinsMenuCaptionAndSaveAliasWithoutLoadingRoslynWorkspace()
+    {
+        using var analyzer = new RoslynAnalyzer(new AnalysisOptions { SolutionPath = fixture.FixturePath });
+        var save = await analyzer.FindUiActionsAsync("재고 저장 찾아줘", 5, Token);
+        var edit = await analyzer.FindUiActionsAsync("재고 수정", 5, Token);
+        var candidate = Assert.Single(save.Items);
+        Assert.Equal("Demo.UI.DesignerTestForm", candidate.Screen);
+        Assert.Equal("SaveClicked", candidate.Handler);
+        Assert.Equal("수정(F12)", candidate.Caption);
+        Assert.Equal(2, edit.Total);
+        Assert.Equal(candidate.Handler, edit.Items[0].Handler);
+        Assert.Contains(edit.Items[0].Evidence,
+            evidence => evidence.Kind == "HandlerCall" && evidence.Text == "SaveData");
+        Assert.Contains(candidate.Evidence, evidence => evidence.Kind == "MenuCaption" && evidence.Text == "재고");
+        Assert.Contains(candidate.Evidence, evidence => evidence.Kind == "ScreenCreation");
+        Assert.Contains(candidate.Evidence, evidence => evidence.Kind == "HandlerCall" && evidence.Text == "SaveData");
+        Assert.All(candidate.Evidence, evidence => Assert.True(evidence.Line > 0));
+        Assert.Equal("Built", save.IndexState);
+        Assert.Equal("Memory", edit.IndexState);
+        Assert.Equal("NotLoaded", analyzer.Status().Status);
+        Assert.Empty((await analyzer.FindUiActionsAsync("없는화면 저장", 5, Token)).Items);
+    }
+
+    [Fact]
     public async Task DatabaseCallsReturnExecutionSitesAndLeaveDynamicTargetsUnresolved()
     {
         var result = await _code.FindDatabaseCallsAsync("Demo.Data.DatabaseCalls.Save", 3, 32, Token);

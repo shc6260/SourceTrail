@@ -19,6 +19,11 @@ public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyLi
 public sealed record TextMatch(string File, int Line, int Column, string Preview);
 public sealed record EventHandlerMatch(string Control, string Event, string Handler, string BindingFile,
     int BindingLine, string? HandlerFile, int? HandlerLine, string? SymbolId);
+public sealed record UiActionEvidence(string Kind, string Text, string File, int Line);
+public sealed record UiActionCandidate(string Screen, string? Title, string Control, string? Caption,
+    string Event, string Handler, IReadOnlyList<UiActionEvidence> Evidence);
+public sealed record UiActionSearchResult(string Status, string IndexState, int IndexedScreens,
+    int Total, bool Truncated, IReadOnlyList<UiActionCandidate> Items);
 public sealed record ProcedureUsage(string Procedure, string File, int Line,
     SymbolInfo? ContainingSymbol, string RelationType, bool IsVerifiedCall, string Evidence);
 public sealed record ProcedureCallRule(string TypeName, string MethodName, int ArgumentIndex);

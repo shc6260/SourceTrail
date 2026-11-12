@@ -48,6 +48,11 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
         Run(cancellationToken, "find_event_handlers",
             () => code.FindEventHandlersAsync(file, query, offset, limit ?? Math.Min(options.MaxResults, 20), cancellationToken));
 
+    [McpServerTool(Name = "find_ui_actions", ReadOnly = true, Destructive = false), Description("Finds WinForms screen and event candidates from a task phrase such as '접수 저장', without a source file path. Uses menu/form/control captions, identifiers and Designer bindings; returns evidence locations. Candidate matching is static and uses no C# compilation.")]
+    public Task<UiActionSearchResult> FindUiActions(string query, CancellationToken cancellationToken, int limit = 5) =>
+        Run(cancellationToken, "find_ui_actions",
+            () => ((IUiActionAnalyzer)code).FindUiActionsAsync(query, limit, cancellationToken), requiresCode: false);
+
     [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Maps procedure string/constant candidates to containing Roslyn symbols and distinguishes configured calls from unverified candidates. Comments are not treated as calls.")]
     public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_procedure_usage", () => code.ProcedureUsagesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken));

@@ -18,7 +18,7 @@ namespace SourceTrail.Roslyn.Workspace;
 
 /// <summary>C# 솔루션의 분석 상태를 유지하고 심볼·참조·호출 근거를 제공한다.</summary>
 public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null)
-    : ICodeAnalyzer, IRefreshableCodeAnalyzer, IDatabaseCallAnalyzer
+    : ICodeAnalyzer, IRefreshableCodeAnalyzer, IDatabaseCallAnalyzer, IUiActionAnalyzer
 {
     private readonly AnalysisOptions _options = options ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
