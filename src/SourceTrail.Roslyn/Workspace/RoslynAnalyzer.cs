@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using SourceTrail.Core;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
@@ -15,7 +17,7 @@ using RSymbol = Microsoft.CodeAnalysis.ISymbol;
 namespace SourceTrail.Roslyn.Workspace;
 
 /// <summary>C# 솔루션의 분석 상태를 유지하고 심볼·참조·호출 근거를 제공한다.</summary>
-public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null) : ICodeAnalyzer, IRefreshableCodeAnalyzer
+public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Action<string>? log = null) : ICodeAnalyzer, IRefreshableCodeAnalyzer
 {
     private readonly AnalysisOptions _options = options ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -27,25 +29,67 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     private MSBuildWorkspace? _workspace;
     private Solution? _solution;
     private readonly Dictionary<string, (RSymbol Symbol, ProjectId Project)> _symbols = new();
+    private ILookup<string, (RSymbol Symbol, ProjectId Project)>? _sourceByDocumentationId;
+    private ILookup<RSymbol, (RSymbol Symbol, ProjectId Project)>? _sourceWithoutDocumentationId;
     private bool _symbolsReady;
     // Internal progress hook enables deterministic cancellation regression tests.
     internal Action? SymbolDocumentIndexed { get; set; }
     private readonly Dictionary<string, CodeExpansion> _expansions = new();
+    private readonly Dictionary<ProjectId, string> _stableProjectKeys = new();
     private readonly Dictionary<DocumentId, IReadOnlyList<ProcedureUsage>> _configuredUsagesByDocument = new();
     private IReadOnlyList<ProcedureUsage>? _usages;
     private SolutionInputTracker _inputs = new();
+    private DiskCodeIndex? _diskIndex;
+    private DiskCodeIndex.Manifest? _manifest;
+    private SymbolInfo[]? _indexedSymbols;
     private bool _reloadRequired;
     private SolutionState _state = new("NotLoaded", null, null, null, [], []);
 
     public SolutionState Status() => _state;
 
-    public Task<SolutionState> ReloadAsync(CancellationToken cancellationToken) =>
-        LoadAsync(_state.SolutionPath ?? throw new InvalidOperationException("Load a solution first."), cancellationToken);
+    public async Task<SolutionState> ReloadAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            string path = _state.SolutionPath ?? throw new InvalidOperationException("Load a solution first.");
+            return await LoadWorkspaceAsync(ValidateSolutionPath(path), _diskIndex, null, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
 
     public async Task<SolutionState> LoadAsync(string solutionPath, CancellationToken cancellationToken)
     {
         string path = ValidateSolutionPath(solutionPath);
         await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var disk = string.IsNullOrWhiteSpace(_options.CodeCacheDirectory) ? null :
+                new DiskCodeIndex(_options.CodeCacheDirectory, path, _options, log);
+            if (disk is not null && await disk.ReadManifestAsync(cancellationToken) is { } manifest &&
+                manifest is { State.SolutionPath: var manifestPath, ExtraInputs: not null, Files: not null } &&
+                StringComparer.OrdinalIgnoreCase.Equals(manifestPath, path) &&
+                manifest.State.SnapshotId is { } snapshot && Guid.TryParseExact(snapshot, "N", out _))
+            {
+                var files = await SolutionInputTracker.CaptureAsync(manifest.State, manifest.ExtraInputs,
+                    manifest.Files, cancellationToken);
+                if (SolutionInputTracker.SameContents(files, manifest.Files))
+                {
+                    PublishSolution(null, null, manifest.State, new());
+                    _diskIndex = disk;
+                    _manifest = manifest with { Files = files };
+                    AnalysisTelemetry.CacheHit("code.disk.manifest");
+                    return _state;
+                }
+            }
+            return await LoadWorkspaceAsync(path, disk, null, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<SolutionState> LoadWorkspaceAsync(string path, DiskCodeIndex? disk,
+        DiskCodeIndex.Manifest? restore, CancellationToken cancellationToken)
+    {
         MSBuildWorkspace? pending = null;
         try
         {
@@ -64,14 +108,28 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             var nextState = new SolutionState(collected.Any(d => d.Severity is "Failure" or "Error") || projects.Count == 0
                 ? "Partial" : "Ready", path, Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow, projects, collected);
             var nextInputs = new SolutionInputTracker();
-            await nextInputs.ChangedAsync(nextState, InputPaths(solution), cancellationToken);
+            DiskCodeIndex.Manifest? manifest = null;
+            if (disk is null)
+                await nextInputs.ChangedAsync(nextState, InputPaths(solution), cancellationToken);
+            else
+            {
+                var extraInputs = InputPaths(solution).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var files = await SolutionInputTracker.CaptureAsync(nextState, extraInputs,
+                    restore?.Files ?? [], cancellationToken);
+                if (restore is not null && SolutionInputTracker.SameContents(files, restore.Files))
+                    nextState = restore.State;
+                manifest = new(nextState, extraInputs, files);
+                await disk.SaveManifestAsync(manifest, cancellationToken);
+            }
             // 준비에 실패하면 기존 스냅샷을 유지하고, 성공한 결과만 공개한다.
             PublishSolution(pending, solution, nextState, nextInputs);
+            _diskIndex = disk;
+            _manifest = manifest;
             pending = null;
             log?.Invoke($"Solution loaded: {projects.Count} projects, status {_state.Status}.");
             return _state;
         }
-        finally { pending?.Dispose(); _gate.Release(); }
+        finally { pending?.Dispose(); }
     }
 
     private IEnumerable<string> InputPaths(Solution? solution = null) => (solution ?? _solution)?.Projects.SelectMany(p =>
@@ -86,12 +144,25 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         .Where(p => p is not null).Cast<string>() ?? [];
     public async Task EnsureFreshAsync(CancellationToken cancellationToken)
     {
-        if (_state.SolutionPath is null) return;
-        if (_reloadRequired || await _inputs.ChangedAsync(_state, InputPaths(), cancellationToken))
+        await _gate.WaitAsync(cancellationToken);
+        try
         {
-            try { await ReloadAsync(cancellationToken); _reloadRequired = false; }
-            catch { _reloadRequired = true; throw; }
+            if (_state.SolutionPath is not { } path) return;
+            bool changed;
+            if (_manifest is { } manifest)
+            {
+                var files = await SolutionInputTracker.CaptureAsync(_state, manifest.ExtraInputs, manifest.Files, cancellationToken);
+                changed = !SolutionInputTracker.SameContents(files, manifest.Files);
+                if (!changed) _manifest = manifest with { Files = files };
+            }
+            else changed = await _inputs.ChangedAsync(_state, InputPaths(), cancellationToken);
+            if (_reloadRequired || changed)
+            {
+                try { await LoadWorkspaceAsync(ValidateSolutionPath(path), _diskIndex, null, cancellationToken); }
+                catch { _reloadRequired = true; throw; }
+            }
         }
+        finally { _gate.Release(); }
     }
 
     private static void RegisterMsBuild()
@@ -121,13 +192,22 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            await EnsureSymbolsAsync(cancellationToken);
-            var matches = _symbols.Values
-                .Where(s => s.Symbol.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                    s.Symbol.ToDisplayString().Contains(query, StringComparison.OrdinalIgnoreCase))
-                .Select(s => Describe(s.Symbol, s.Project)).OrderBy(s => s.Project)
-                .ThenBy(s => s.FullName).ToArray();
-            return Paginate(matches, offset, limit);
+            if (_diskIndex is not null && _indexedSymbols is null)
+                _indexedSymbols = await ReadDiskItemAsync<SymbolInfo[]>("symbols", cancellationToken);
+            IEnumerable<SymbolInfo> matches;
+            if (_indexedSymbols is { } index)
+                matches = index.Where(s => s.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    s.FullName.Contains(query, StringComparison.OrdinalIgnoreCase));
+            else
+            {
+                await EnsureSymbolsAsync(cancellationToken);
+                matches = _symbols.Values
+                    .Where(s => s.Symbol.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                        s.Symbol.ToDisplayString().Contains(query, StringComparison.OrdinalIgnoreCase))
+                    .Select(s => Describe(s.Symbol, s.Project));
+            }
+            return Paginate(matches.OrderBy(s => s.Project)
+                .ThenBy(s => s.FullName).ToArray(), offset, limit);
         }
         finally { _gate.Release(); }
     }
@@ -184,16 +264,21 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         finally { _gate.Release(); }
     }
 
-    public async Task<Page<TextMatch>> SearchTextAsync(string text, int offset, int limit, CancellationToken cancellationToken)
+    public async Task<Page<TextMatch>> SearchTextAsync(string text, int offset, int limit, CancellationToken cancellationToken,
+        string? directory = null, string? extension = null)
     {
         RequireText(text, nameof(text)); ValidatePage(offset, limit);
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            RequireSolution();
+            var solutionRoot = GetSolutionRoot();
+            if (extension is not null && !SearchExtensions.Contains(extension))
+                throw new ArgumentException("Unsupported search file extension.", nameof(extension));
             var matches = new List<TextMatch>();
-            var roots = new[] { Path.GetDirectoryName(_state.SolutionPath!)! }.Concat(_options.AdditionalSearchRoots);
-            foreach (var file in roots.SelectMany(EnumerateSearchFiles).Distinct(StringComparer.OrdinalIgnoreCase))
+            var roots = directory is null ? new[] { solutionRoot }.Concat(_options.AdditionalSearchRoots) :
+                new[] { ResolveSolutionPath(solutionRoot, directory) };
+            foreach (var file in roots.SelectMany(root => EnumerateSearchFiles(root, extension))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 CollectTextMatches(file, text, matches, cancellationToken);
             }
@@ -202,7 +287,7 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         finally { _gate.Release(); }
     }
 
-    private static IEnumerable<string> EnumerateSearchFiles(string root)
+    private static IEnumerable<string> EnumerateSearchFiles(string root, string? extension)
     {
         if (!Directory.Exists(root)) yield break;
         var pending = new Stack<string>(); pending.Push(Path.GetFullPath(root));
@@ -213,7 +298,8 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             catch (IOException) { continue; }
             catch (UnauthorizedAccessException) { continue; }
             foreach (var file in files)
-                if (SearchExtensions.Contains(Path.GetExtension(file))) yield return file;
+                if (extension is null ? SearchExtensions.Contains(Path.GetExtension(file)) :
+                    extension.Equals(Path.GetExtension(file), StringComparison.OrdinalIgnoreCase)) yield return file;
             foreach (var directory in directories)
                 if (!ExcludedDirectories.Contains(Path.GetFileName(directory)) &&
                     (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0) pending.Push(directory);
@@ -244,6 +330,8 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     private async Task EnsureUsagesAsync(CancellationToken cancellationToken)
     {
         if (_usages is not null) { AnalysisTelemetry.CacheHit("procedure.usages"); return; }
+        _usages = await ReadDiskItemAsync<ProcedureUsage[]>("usages", cancellationToken);
+        if (_usages is not null) return;
         await EnsureSymbolsAsync(cancellationToken);
         using var measurement = AnalysisTelemetry.Measure("code.usages.build");
         var usages = new List<ProcedureUsage>();
@@ -258,6 +346,7 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
                 CollectStringCandidates(document, root, model, usages, cancellationToken);
             }
         _usages = usages.DistinctBy(u => (u.Procedure, u.File, u.Line, u.ContainingSymbol?.Id, u.RelationType)).ToArray();
+        await SaveDiskItemAsync("usages", _usages, cancellationToken);
     }
 
     private IReadOnlyList<ProcedureUsage> ConfiguredUsages(Document document, SyntaxNode root, SemanticModel model,
@@ -310,9 +399,13 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            string direction = callers ? ":in" : ":out";
+            if (_expansions.TryGetValue(symbol + direction, out var memory)) return memory;
+            if (await ReadDiskItemAsync<CodeExpansion>("expand:" + symbol + direction, cancellationToken) is { } indexed)
+                return _expansions[symbol + direction] = indexed;
             await EnsureSymbolsAsync(cancellationToken);
             var selected = Resolve(symbol);
-            string key = Id(selected.Symbol, selected.Project) + (callers ? ":in" : ":out");
+            string key = Id(selected.Symbol, selected.Project) + direction;
             if (_expansions.TryGetValue(key, out var cached)) { AnalysisTelemetry.CacheHit("code.expansion"); return cached; }
             using var measurement = AnalysisTelemetry.Measure(callers ? "code.expand.callers" : "code.expand.callees");
             var described = Describe(selected.Symbol, selected.Project);
@@ -323,8 +416,11 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             if (selected.Symbol.ContainingType?.GetAttributes().Any(a => a.AttributeClass?.Name == "ServiceContractAttribute") == true)
                 warnings.Add("WCF contract boundary: a remote implementation is not inferred from method names.");
             var usages = await VerifiedUsagesAsync(selected.Symbol, described, cancellationToken);
+            if (selected.Symbol is IMethodSymbol method)
+                usages = usages.Concat(await TableAdapterUsagesAsync(method, described, cancellationToken)).ToArray();
             var result = new CodeExpansion(described, relations, usages, warnings);
             _expansions[key] = result;
+            await SaveDiskItemAsync("expand:" + key, result, cancellationToken);
             return result;
         }
         finally { _gate.Release(); }
@@ -370,15 +466,23 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         left.ContainingAssembly?.Identity.Equals(right.ContainingAssembly?.Identity) == true;
     private (RSymbol Symbol, ProjectId Project)? FindSourceEntry(RSymbol symbol)
     {
-        string? docId = symbol.OriginalDefinition.GetDocumentationCommentId();
-        var entries = _symbols.Values.Where(s => SymbolEqualityComparer.Default.Equals(s.Symbol, symbol.OriginalDefinition) ||
-            docId is not null && s.Symbol.GetDocumentationCommentId() == docId &&
-            s.Symbol.ContainingAssembly?.Identity.Equals(symbol.ContainingAssembly?.Identity) == true).ToArray();
+        var definition = symbol.OriginalDefinition;
+        string? docId = definition.GetDocumentationCommentId();
+        if (docId is null)
+        {
+            var exact = _sourceWithoutDocumentationId![definition].Take(2).ToArray();
+            return exact.Length == 1 ? exact[0] : null;
+        }
+        var entries = _sourceByDocumentationId![docId].Where(s =>
+            SymbolEqualityComparer.Default.Equals(s.Symbol, definition) ||
+            s.Symbol.ContainingAssembly?.Identity.Equals(symbol.ContainingAssembly?.Identity) == true).Take(2).ToArray();
         return entries.Length == 1 ? entries[0] : null;
     }
 
     private async Task EnsureSymbolsAsync(CancellationToken cancellationToken)
     {
+        if (_solution is null && _manifest is { } restore)
+            await LoadWorkspaceAsync(ValidateSolutionPath(restore.State.SolutionPath!), _diskIndex, restore, cancellationToken);
         var solution = RequireSolution();
         if (_symbolsReady) { AnalysisTelemetry.CacheHit("symbols"); return; }
         using var measurement = AnalysisTelemetry.Measure("code.symbols.build");
@@ -401,11 +505,23 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
                 }
                 SymbolDocumentIndexed?.Invoke();
             }
+        var documented = staged.Values.Select(entry => (Entry: entry, Id: entry.Symbol.GetDocumentationCommentId())).ToArray();
+        var byDocumentationId = documented.Where(item => item.Id is not null)
+            .ToLookup(item => item.Id!, item => item.Entry, StringComparer.Ordinal);
+        var withoutDocumentationId = documented.Where(item => item.Id is null)
+            .ToLookup(item => item.Entry.Symbol, item => item.Entry, (IEqualityComparer<RSymbol>)SymbolEqualityComparer.Default);
         cancellationToken.ThrowIfCancellationRequested();
         // Publish only a complete index, including a successfully empty index.
         _symbols.Clear();
         foreach (var entry in staged) _symbols.Add(entry.Key, entry.Value);
+        _sourceByDocumentationId = byDocumentationId;
+        _sourceWithoutDocumentationId = withoutDocumentationId;
         _symbolsReady = true;
+        if (_diskIndex is not null)
+        {
+            _indexedSymbols = staged.Values.Select(entry => Describe(entry.Symbol, entry.Project)).ToArray();
+            await SaveDiskItemAsync("symbols", _indexedSymbols, cancellationToken);
+        }
     }
 
     private (RSymbol Symbol, ProjectId Project) Resolve(string query)
@@ -442,9 +558,24 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
             symbol.ContainingType?.ToDisplayString(), isUi);
     }
 
-    private static string Id(RSymbol symbol, ProjectId projectId) =>
-        projectId.Id.ToString("N") + "|" + (symbol.GetDocumentationCommentId() ??
+    private string Id(RSymbol symbol, ProjectId projectId)
+    {
+        string projectKey = projectId.Id.ToString("N");
+        if (_diskIndex is not null)
+        {
+            if (!_stableProjectKeys.TryGetValue(projectId, out var stableKey))
+            {
+                var project = RequireSolution().GetProject(projectId)!;
+                string projectIdentity = _state.SnapshotId + "\0" +
+                    (project.FilePath ?? project.Name).ToUpperInvariant() + "\0" + project.Name;
+                stableKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(projectIdentity)));
+                _stableProjectKeys.Add(projectId, stableKey);
+            }
+            projectKey = stableKey;
+        }
+        return projectKey + "|" + (symbol.GetDocumentationCommentId() ??
             symbol.ToDisplayString() + "@" + symbol.Locations.FirstOrDefault(l => l.IsInSource)?.SourceSpan.Start);
+    }
     private static RSymbol? EnclosingDeclaration(RSymbol? symbol)
     {
         while (symbol is not null && (symbol.Kind is SymbolKind.Local or SymbolKind.Parameter ||
@@ -497,21 +628,39 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     }
 
     // 로딩과 입력 대조가 모두 끝난 뒤 교체한다. 이전 심볼/관계 캐시는 새 스냅샷에 넘기지 않는다.
-    private void PublishSolution(MSBuildWorkspace workspace, Solution solution,
+    private void PublishSolution(MSBuildWorkspace? workspace, Solution? solution,
         SolutionState nextState, SolutionInputTracker nextInputs)
     {
         _workspace?.Dispose();
         _workspace = workspace;
         _solution = solution;
         _symbols.Clear();
+        _sourceByDocumentationId = null;
+        _sourceWithoutDocumentationId = null;
         _symbolsReady = false;
+        _indexedSymbols = null;
         _expansions.Clear();
+        _wcfHostsByAction = null;
+        _stableProjectKeys.Clear();
         _usages = null;
         _configuredUsagesByDocument.Clear();
         _state = nextState;
         _inputs = nextInputs;
+        _reloadRequired = false;
     }
 
+    private async Task<T?> ReadDiskItemAsync<T>(string key, CancellationToken token) where T : class
+    {
+        if (_diskIndex is null || _state.SnapshotId is not { } snapshot) return null;
+        var value = await _diskIndex.ReadItemAsync<T>(snapshot, key, token);
+        if (value is not null) AnalysisTelemetry.CacheHit("code.disk." + (key.StartsWith("expand:") ? "expansion" : key));
+        return value;
+    }
+
+    private Task SaveDiskItemAsync<T>(string key, T value, CancellationToken token) =>
+        _diskIndex is not null && _state.SnapshotId is { } snapshot
+            ? _diskIndex.SaveItemAsync(snapshot, key, value, token)
+            : Task.CompletedTask;
 
     // 등록한 DB 래퍼의 상수 인자만 검증된 프로시저 호출로 수집한다.
     private void CollectConfiguredCalls(Document document, SyntaxNode root, SemanticModel model,
@@ -588,14 +737,29 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
         cancellationToken.ThrowIfCancellationRequested();
         var owner = EnclosingDeclaration(model.GetEnclosingSymbol(call.SpanStart, cancellationToken));
         if (owner is null || !SymbolEqualityComparer.Default.Equals(owner, symbol)) return;
-        IMethodSymbol? target = model.GetOperation(call, cancellationToken) switch
+        var operation = model.GetOperation(call, cancellationToken);
+        IMethodSymbol? target = operation switch
         {
-            IInvocationOperation invocation => invocation.TargetMethod,
+            IInvocationOperation invocationTarget => invocationTarget.TargetMethod,
             IObjectCreationOperation creation => creation.Constructor,
             _ => null
         };
         if (target is null) return;
+        if (operation is IInvocationOperation &&
+            AddWcfHostCandidates(GeneratedProxyAction(target), symbol, projectId, call.GetLocation(), relations, cancellationToken))
+            return;
+        if (operation is IInvocationOperation invocation &&
+            invocation.Instance is IConversionOperation { Operand: IInstanceReferenceOperation { ReferenceKind: InstanceReferenceKind.ContainingTypeInstance } } &&
+            target.ContainingType.TypeKind == TypeKind.Interface &&
+            symbol.ContainingType.FindImplementationForInterfaceMember(target) is IMethodSymbol implementation)
+            target = implementation;
         target = (target.ReducedFrom ?? target).OriginalDefinition;
+        if (operation is IInvocationOperation channelCall &&
+            channelCall.Instance is IPropertyReferenceOperation channel &&
+            channel.Property.Name == "Channel" &&
+            channel.Property.ContainingType.OriginalDefinition.ToDisplayString() == "System.ServiceModel.ClientBase<TChannel>" &&
+            AddWcfHostCandidates(WcfAction(target), symbol, projectId, call.GetLocation(), relations, cancellationToken))
+            return;
         var targetEntry = FindSourceEntry(target);
         if (targetEntry is null) return;
         relations.Add(new(Describe(symbol, projectId), Describe(targetEntry.Value.Symbol, targetEntry.Value.Project),
@@ -610,7 +774,9 @@ public sealed class RoslynAnalyzer(AnalysisOptions? options = null, Action<strin
     {
         if (target.ContainingType.TypeKind == TypeKind.Interface || target.IsAbstract || target.IsVirtual)
         {
-            var implementations = await SymbolFinder.FindImplementationsAsync(targetEntry.Symbol, RequireSolution(), cancellationToken: cancellationToken);
+            IEnumerable<RSymbol> implementations;
+            using (AnalysisTelemetry.Measure("code.dispatch.implementations"))
+                implementations = await SymbolFinder.FindImplementationsAsync(targetEntry.Symbol, RequireSolution(), cancellationToken: cancellationToken);
             foreach (var implementation in implementations)
             {
                 var entry = FindSourceEntry(implementation);

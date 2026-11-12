@@ -19,6 +19,40 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
         var path = FindPath(graph, entry.Id, targetId, includeDispatch: false)
             ?? FindPath(graph, entry.Id, targetId, includeDispatch: true);
         var nodes = graph.Nodes.ToDictionary(node => node.Id);
+        bool truncated = graph.Truncated;
+        var warnings = graph.Warnings.ToHashSet();
+        if (path is null)
+        {
+            // A large UI graph can fill the node limit before the WCF server's calls are added.
+            // Resume at each selected host with its own limits and join on the exact server symbol ID.
+            const int maxHosts = 8;
+            var procedureName = procedure.Trim().Split('.').Last().Trim('[', ']');
+            var hosts = graph.Edges.Where(edge => edge.RelationType == "DispatchCandidate" &&
+                    edge.File?.EndsWith(".svc", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(edge => nodes[edge.To]).DistinctBy(node => node.Id)
+                .OrderByDescending(node => MatchesProcedureSuffix(node.Name, procedureName))
+                .Take(maxHosts + 1).ToArray();
+            truncated |= hosts.Length > maxHosts;
+            foreach (var host in hosts.Take(maxHosts))
+            {
+                var prefix = FindPath(graph, entry.Id, host.Id, includeDispatch: true);
+                if (prefix is null) continue;
+                var downstream = await TraceCodeAsync(host.Id, maxDepth, maxNodes, targetId, cancellationToken);
+                if (downstream.SnapshotId != graph.SnapshotId || downstream.Nodes[0].Id != host.Id)
+                {
+                    truncated = true;
+                    break;
+                }
+                truncated |= downstream.Truncated;
+                warnings.UnionWith(downstream.Warnings);
+                var suffix = FindPath(downstream, host.Id, targetId, includeDispatch: false)
+                    ?? FindPath(downstream, host.Id, targetId, includeDispatch: true);
+                if (suffix is null) continue;
+                path = prefix.Concat(suffix).ToArray();
+                foreach (var node in downstream.Nodes) nodes.TryAdd(node.Id, node);
+                break;
+            }
+        }
         var steps = path?.Select(edge => new ProcedurePathStep(nodes[edge.To].Name, edge.RelationType,
             edge.Evidence, edge.File, edge.Line)).ToArray() ?? [];
         var definition = await sql.AnalyzeAsync(procedure.Trim(), false, cancellationToken);
@@ -26,12 +60,23 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
             .Concat(definition.Dependencies.Where(IsReadDependency).Take(8)).ToArray();
         var status = path is null ? "NotConnected" :
             path.Any(edge => edge.RelationType == "DispatchCandidate") ? "Candidate" : "StaticPath";
-        return new(status, graph.SnapshotId, entry, procedure.Trim(), steps, graph.Truncated,
+        return new(status, graph.SnapshotId, entry, procedure.Trim(), steps, truncated,
             code.Status().Status, definition.Status, definition.SourcePath,
             dependencies, definition.Dependencies.Count,
-            graph.Warnings.Count, definition.Warnings.Count, path is null
+            warnings.Count, definition.Warnings.Count, path is null
                 ? "No path found within the search bounds. Check WCF boundaries and adapter command mappings in source. SQL dependencies are independently analyzed."
                 : null);
+    }
+
+    // Naming similarity only orders candidates; the returned path still requires call-site evidence.
+    private static bool MatchesProcedureSuffix(string hostMethod, string procedure)
+    {
+        var signature = hostMethod.AsSpan();
+        int parameters = signature.IndexOf('(');
+        if (parameters >= 0) signature = signature[..parameters];
+        var name = signature[(signature.LastIndexOf('.') + 1)..];
+        var suffix = name[(name.LastIndexOf('_') + 1)..];
+        return suffix.Length > 0 && procedure.AsSpan().EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsReadDependency(SqlObject dependency) =>

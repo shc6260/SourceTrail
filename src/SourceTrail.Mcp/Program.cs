@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -16,14 +17,15 @@ internal static class Program
 {
     public static async Task Main(string[] args)
     {
+        // Codex reads MCP stderr as UTF-8, including localized MSBuild diagnostics.
+        Console.OutputEncoding = Encoding.UTF8;
         var builder = CreateBuilder(args);
-        var analysisOptions = RegisterServices(builder);
+        RegisterServices(builder);
 
         using var host = builder.Build();
         var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
         using var measurements = AnalysisTelemetry.Listen(message => startupLogger.LogInformation("{Measurement}", message));
         startupLogger.LogInformation("SourceTrail MCP starting.");
-        await LoadConfiguredSolutionAsync(host, analysisOptions, startupLogger);
         await host.RunAsync();
     }
 
@@ -45,7 +47,7 @@ internal static class Program
     }
 
     // 분석기는 Singleton으로 등록해 도구 호출 간 작업 공간과 색인을 재사용한다.
-    private static AnalysisOptions RegisterServices(HostApplicationBuilder builder)
+    private static void RegisterServices(HostApplicationBuilder builder)
     {
         var analysisOptions = builder.Configuration.GetSection("Analysis").Get<AnalysisOptions>() ?? new();
         var databaseOptions = builder.Configuration.GetSection("Database").Get<DatabaseOptions>() ?? new();
@@ -66,20 +68,6 @@ internal static class Program
         builder.Services.AddSingleton(new SemaphoreSlim(1, 1));
         builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();
 
-        return analysisOptions;
-    }
-
-    private static async Task LoadConfiguredSolutionAsync(IHost host, AnalysisOptions analysisOptions, ILogger startupLogger)
-    {
-        // 시작 경로가 없으면 load_solution 호출을 기다린다. 시작 로딩 실패도 도구로 재시도할 수 있다.
-        if (!string.IsNullOrWhiteSpace(analysisOptions.SolutionPath))
-        {
-            try { await host.Services.GetRequiredService<ICodeAnalyzer>().LoadAsync(analysisOptions.SolutionPath, CancellationToken.None); }
-            catch (Exception error)
-            {
-                startupLogger.LogWarning("Configured solution load failed ({ErrorType}); use load_solution to retry.", error.GetType().Name);
-            }
-        }
     }
 
 }

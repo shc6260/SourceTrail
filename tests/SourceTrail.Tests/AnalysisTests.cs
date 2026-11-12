@@ -41,6 +41,44 @@ public sealed class AnalysisTests(LoadedSolution fixture)
     }
 
     [Fact]
+    public async Task ScopedTextSearchLimitsTheScanToSolutionFolderAndExtension()
+    {
+        var matches = await _code.SearchTextAsync("namespace Demo", 0, 100, Token, "Demo.UI", ".cs");
+        Assert.NotEmpty(matches.Items);
+        Assert.All(matches.Items, match =>
+        {
+            Assert.Equal("Demo.UI", Path.GetFileName(Path.GetDirectoryName(match.File)));
+            Assert.EndsWith(".cs", match.File);
+        });
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _code.SearchTextAsync("namespace Demo", 0, 100, Token, "..", ".cs"));
+    }
+
+    [Fact]
+    public async Task WcfActionAndHostedAdapterReturnStaticCandidateWithRowStateEvidence()
+    {
+        var entry = await Find("Demo.Data.SaveClientEntry.Save(System.Data.DataTable)");
+        var flow = new FlowAnalyzer(_code, new FakeDatabase());
+        var path = await flow.TraceProcedurePathAsync(entry.Id, "dbo.usp_SaveFixture", 3, 3, Token);
+        if (path.PathStatus != "Candidate")
+        {
+            var graph = await flow.TraceCodeAsync(entry.Id, 12, 120, Token);
+            var names = graph.Nodes.ToDictionary(node => node.Id, node => node.Name);
+            Assert.Fail(string.Join(Environment.NewLine, graph.Edges.Select(edge =>
+                $"{names[edge.From]} -> {names[edge.To]} ({edge.RelationType})").Concat(graph.Warnings)));
+        }
+        Assert.Contains(path.Steps, step => step.RelationType == "DispatchCandidate" &&
+            step.File?.EndsWith("SaveService.svc") == true);
+        Assert.Contains(path.Steps, step => step.RelationType == "TableAdapterCommand" &&
+            step.Evidence.Contains("Modified rows"));
+        Assert.Equal(3, path.Steps.Count);
+        Assert.True(path.SearchTruncated);
+        Assert.DoesNotContain(path.Steps, step => step.Target.Contains("Demo.Data.SaveClient."));
+        var textCommand = await flow.TraceProcedurePathAsync(entry.Id, "dbo.usp_InsertFixture", 12, 120, Token);
+        Assert.Equal("NotConnected", textCommand.PathStatus);
+    }
+
+    [Fact]
     public void LoadsAllProjectsAndReportsSnapshot()
     {
         var status = _code.Status();

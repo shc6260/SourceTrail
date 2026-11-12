@@ -17,6 +17,8 @@ public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyLi
     IReadOnlyList<SymbolInfo> Constructors, IReadOnlyList<SymbolInfo> Events,
     string? SnapshotId, IReadOnlyList<string> Warnings);
 public sealed record TextMatch(string File, int Line, int Column, string Preview);
+public sealed record EventHandlerMatch(string Control, string Event, string Handler, string BindingFile,
+    int BindingLine, string? HandlerFile, int? HandlerLine, string? SymbolId);
 public sealed record ProcedureUsage(string Procedure, string File, int Line,
     SymbolInfo? ContainingSymbol, string RelationType, bool IsVerifiedCall, string Evidence);
 public sealed record ProcedureCallRule(string TypeName, string MethodName, int ArgumentIndex);
@@ -46,6 +48,7 @@ public sealed record ProcedurePathResult(string PathStatus, string? SnapshotId, 
 public sealed class AnalysisOptions
 {
     public string SolutionPath { get; set; } = "";
+    public string CodeCacheDirectory { get; set; } = "";
     public string[] AdditionalSearchRoots { get; set; } = [];
     public int MaxDepth { get; set; } = 5;
     public int MaxNodes { get; set; } = 200;

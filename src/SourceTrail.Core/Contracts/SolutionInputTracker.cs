@@ -12,6 +12,45 @@ public interface IRefreshableCodeAnalyzer
 /// <summary>분석 입력의 목록과 내용 해시를 비교해 추가·수정·삭제 여부를 판단한다.</summary>
 public sealed class SolutionInputTracker
 {
+    public sealed record FileStamp(string Path, long Size, DateTime LastWriteUtc, DateTime CreationUtc, string Hash);
+
+    public static async Task<FileStamp[]> CaptureAsync(SolutionState state, IEnumerable<string> extraInputs,
+        FileStamp[] previous, CancellationToken token)
+    {
+        using var measurement = AnalysisTelemetry.Measure("code.input.stamps");
+        var known = previous.ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
+        var paths = CollectInputPaths(state, extraInputs);
+        var files = new List<FileStamp>(paths.Count);
+        foreach (var path in paths.Order(StringComparer.OrdinalIgnoreCase))
+        {
+            token.ThrowIfCancellationRequested();
+            var info = new FileInfo(path);
+            if (!info.Exists) continue;
+            if (known.TryGetValue(path, out var existing) && existing.Size == info.Length &&
+                existing.LastWriteUtc == info.LastWriteTimeUtc && existing.CreationUtc == info.CreationTimeUtc)
+            {
+                files.Add(existing);
+                continue;
+            }
+            long size = info.Length;
+            var modified = info.LastWriteTimeUtc;
+            var created = info.CreationTimeUtc;
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            string hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token));
+            info.Refresh();
+            if (!info.Exists || info.Length != size || info.LastWriteTimeUtc != modified || info.CreationTimeUtc != created)
+                throw new IOException("A solution input changed during indexing.");
+            files.Add(new(path, size, modified, created, hash));
+        }
+        return files.ToArray();
+    }
+
+    public static bool SameContents(FileStamp[] left, FileStamp[] right) =>
+        left.Length == right.Length && left.Zip(right).All(pair =>
+            StringComparer.OrdinalIgnoreCase.Equals(pair.First.Path, pair.Second.Path) &&
+            pair.First.Hash == pair.Second.Hash);
+
     private string? fingerprint;
     public void Reset() => fingerprint = null;
     public async Task<bool> ChangedAsync(SolutionState state, IEnumerable<string> extraInputs, CancellationToken token)
@@ -78,7 +117,7 @@ public sealed class SolutionInputTracker
                 if (attr.HasFlag(FileAttributes.ReparsePoint)) continue;
                 if (attr.HasFlag(FileAttributes.Directory))
                 { if (Path.GetFileName(entry) is not "bin" and not "obj" and not ".git" and not ".svn" and not ".vs" and not "node_modules") pending.Push(entry); }
-                else if (Path.GetExtension(entry).ToLowerInvariant() is ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".config" or ".json" or ".dll") paths.Add(entry);
+                else if (Path.GetExtension(entry).ToLowerInvariant() is ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".svc" or ".config" or ".json" or ".dll") paths.Add(entry);
             }
         }
     }

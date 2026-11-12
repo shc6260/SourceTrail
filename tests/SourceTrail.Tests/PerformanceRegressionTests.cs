@@ -73,6 +73,32 @@ public sealed class PerformanceRegressionTests
     }
 
     [Fact]
+    public async Task DiskIndexStampsDistinguishTimestampChangesFromContentChanges()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "sourcetrail-stamps-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string solution = Path.Combine(root, "Fixture.sln"), source = Path.Combine(root, "Fixture.cs");
+            await File.WriteAllTextAsync(solution, "");
+            await File.WriteAllTextAsync(source, "class A {}");
+            var state = new SolutionState("Ready", solution, null, null, [], []);
+            var original = await SolutionInputTracker.CaptureAsync(state, [], [], default);
+            var stamp = Assert.Single(original, file => file.Path == source);
+            File.SetLastWriteTimeUtc(source, stamp.LastWriteUtc.AddMinutes(-1));
+            var touched = await SolutionInputTracker.CaptureAsync(state, [], original, default);
+            Assert.True(SolutionInputTracker.SameContents(original, touched));
+            await File.WriteAllTextAsync(source, "class B {}");
+            var edited = await SolutionInputTracker.CaptureAsync(state, [], touched, default);
+            Assert.False(SolutionInputTracker.SameContents(original, edited));
+            File.Delete(source);
+            var removed = await SolutionInputTracker.CaptureAsync(state, [], edited, default);
+            Assert.False(SolutionInputTracker.SameContents(edited, removed));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void CompactRoundTripPreservesEveryCallSiteAndStateAndReducesRepeatedText()
     {
         var nodes = Enumerable.Range(0, 8).Select(i => new FlowNode(new string('x', 120) + i,
@@ -120,7 +146,10 @@ public sealed class PerformanceRegressionTests
         public Task<Page<SymbolInfo>> FindSymbolsAsync(string query, int offset, int limit, CancellationToken token) => Task.FromResult(new Page<SymbolInfo>([], 0, offset, limit, false, null, []));
         public Task<SymbolOverview> OverviewAsync(string symbol, CancellationToken token) => throw new NotSupportedException();
         public Task<Page<ReferenceInfo>> ReferencesAsync(string symbol, int offset, int limit, CancellationToken token) => throw new NotSupportedException();
-        public Task<Page<TextMatch>> SearchTextAsync(string text, int offset, int limit, CancellationToken token) =>
+        public Task<Page<EventHandlerMatch>> FindEventHandlersAsync(string file, string? query, int offset, int limit,
+            CancellationToken token) => throw new NotSupportedException();
+        public Task<Page<TextMatch>> SearchTextAsync(string text, int offset, int limit, CancellationToken token,
+            string? directory = null, string? extension = null) =>
             Task.FromResult(new Page<TextMatch>([], 0, offset, limit, false, null, []));
         public Task<Page<ProcedureUsage>> ProcedureUsagesAsync(string procedure, int offset, int limit, CancellationToken token) => throw new NotSupportedException();
         public Task<CodeExpansion> ExpandAsync(string symbol, bool callers, CancellationToken token) => throw new NotSupportedException();
@@ -131,6 +160,74 @@ public sealed class PerformanceRegressionTests
 [Collection("Solution")]
 public sealed class SymbolCancellationTests(LoadedSolution fixture)
 {
+    [Fact]
+    public async Task ConfiguredSolutionOpensOnceForConcurrentAnalysisButNotForTextSearch()
+    {
+        var options = new AnalysisOptions { SolutionPath = fixture.FixturePath };
+        var messages = new List<string>();
+        using var code = new RoslynAnalyzer(options, messages.Add);
+        var sql = new DependencyFixture([]);
+        using var gate = new SemaphoreSlim(1, 1);
+        var tools = new AnalysisTools(code, sql, new FlowAnalyzer(code, sql),
+            NullLogger<AnalysisTools>.Instance, options, gate);
+
+        Assert.Equal("NotLoaded", tools.GetAnalysisStatus().Status);
+        var text = await tools.SearchText("namespace Demo", default, directory: "Demo.UI", extension: ".cs");
+        Assert.NotEmpty(text.Items);
+        Assert.Equal("NotLoaded", tools.GetAnalysisStatus().Status);
+        Assert.Empty(messages);
+
+        var results = await Task.WhenAll(
+            tools.FindSymbol("Demo.Data.Repository.Save()", default),
+            tools.FindSymbol("Demo.UI.DesignerTestForm", default));
+        Assert.All(results, result => Assert.NotEmpty(result.Items));
+        Assert.Single(messages, message => message.StartsWith("Loading solution:"));
+        Assert.Equal(fixture.FixturePath, tools.GetAnalysisStatus().SolutionPath);
+    }
+
+    [Fact]
+    public async Task DiskIndexRestoresSymbolsAndCallEvidenceWithoutOpeningWorkspace()
+    {
+        string cache = Path.Combine(Path.GetTempPath(), "sourcetrail-code-" + Guid.NewGuid().ToString("N"));
+        var options = new AnalysisOptions
+        {
+            CodeCacheDirectory = cache,
+            ProcedureCallRules = [new("Demo.Data.Db", "ExecuteProcedure", 0)]
+        };
+        const string query = "Demo.Data.Repository.Save()";
+        try
+        {
+            using var first = new RoslynAnalyzer(options);
+            var state = await first.LoadAsync(fixture.FixturePath, default);
+            var symbol = Assert.Single((await first.FindSymbolsAsync(query, 0, 100, default)).Items);
+            var expansion = await first.ExpandAsync(symbol.Id, false, default);
+            Assert.Contains(expansion.ProcedureUsages, item => item.IsVerifiedCall);
+
+            var messages = new List<string>();
+            using var second = new RoslynAnalyzer(options, messages.Add);
+            Assert.Equal(state.SnapshotId, (await second.LoadAsync(fixture.FixturePath, default)).SnapshotId);
+            await second.EnsureFreshAsync(default);
+            var form = Path.Combine(Path.GetDirectoryName(fixture.FixturePath)!, "Demo.UI", "DesignerTestForm.cs");
+            var handler = Assert.Single((await second.FindEventHandlersAsync(form, "save", 0, 10, default)).Items);
+            Assert.Equal("SaveClicked", handler.Handler);
+            Assert.Equal("Click", handler.Event);
+            Assert.Equal(form, handler.HandlerFile);
+            Assert.NotNull(handler.SymbolId);
+            Assert.EndsWith("DesignerTestForm.Designer.cs", handler.BindingFile);
+            Assert.DoesNotContain(messages, line => line.StartsWith("Loading solution:"));
+            Assert.Equal(symbol, Assert.Single((await second.FindSymbolsAsync(query, 0, 100, default)).Items));
+            var restored = await second.ExpandAsync(symbol.Id, false, default);
+            Assert.Equal(JsonSerializer.Serialize(expansion), JsonSerializer.Serialize(restored));
+            Assert.DoesNotContain(messages, line => line.StartsWith("Loading solution:"));
+
+            // A relationship absent from the disk cache must still resolve the restored symbol ID.
+            await second.ExpandAsync(symbol.Id, true, default);
+            Assert.Contains(messages, line => line.StartsWith("Loading solution:"));
+            Assert.Equal(state.SnapshotId, second.Status().SnapshotId);
+        }
+        finally { if (Directory.Exists(cache)) Directory.Delete(cache, true); }
+    }
+
     [Fact]
     public async Task ColdExpansionPreservesVerifiedCallsWithoutPromotingTextCandidates()
     {

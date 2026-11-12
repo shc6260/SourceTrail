@@ -17,7 +17,7 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<SolutionState> LoadSolution(string solutionPath, CancellationToken cancellationToken) =>
         Run(cancellationToken, "load_solution", () => code.LoadAsync(solutionPath, cancellationToken));
 
-    [McpServerTool(Name = "get_analysis_status", ReadOnly = true, Destructive = false), Description("Returns the active solution snapshot and load diagnostics.")]
+    [McpServerTool(Name = "get_analysis_status", ReadOnly = true, Destructive = false), Description("Returns the active solution snapshot and load diagnostics. A configured default solution loads on the first C# analysis request.")]
     public SolutionState GetAnalysisStatus() => code.Status();
 
     [McpServerTool(Name = "reload_solution", ReadOnly = true, Destructive = false), Description("Reloads the active solution from disk and invalidates cached symbols and relationships.")]
@@ -36,9 +36,17 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<Page<ReferenceInfo>> FindReferences(string symbol, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_references", () => code.ReferencesAsync(symbol, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "search_text", ReadOnly = true, Destructive = false), Description("Searches current disk files under the last loaded solution and additional roots, excluding bin/obj/version-control folders. Results are text candidates; snapshot metadata refers to the last semantic load.")]
-    public Task<Page<TextMatch>> SearchText(string text, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
-        Run(cancellationToken, "search_text", () => code.SearchTextAsync(text, offset, limit ?? options.MaxResults, cancellationToken), requiresCode: false);
+    [McpServerTool(Name = "search_text", ReadOnly = true, Destructive = false), Description("Searches current disk files. Set directory to a solution-relative folder and extension (e.g. .cs) to narrow the scan. With no directory, searches the solution and configured additional roots. Results are text candidates.")]
+    public Task<Page<TextMatch>> SearchText(string text, CancellationToken cancellationToken, int offset = 0, int? limit = null,
+        string? directory = null, string? extension = null) =>
+        Run(cancellationToken, "search_text",
+            () => code.SearchTextAsync(text, offset, limit ?? options.MaxResults, cancellationToken, directory, extension), requiresCode: false);
+
+    [McpServerTool(Name = "find_event_handlers", ReadOnly = true, Destructive = false), Description("Finds WinForms Designer event subscription candidates in InitializeComponent for a form's C# file. Use query to filter by control, event or handler name. Returns binding and handler source locations and a symbol ID when the existing symbol index identifies a unique handler. Can read source locations without opening Roslyn's solution workspace.")]
+    public Task<Page<EventHandlerMatch>> FindEventHandlers(string file, CancellationToken cancellationToken,
+        string? query = null, int offset = 0, int? limit = null) =>
+        Run(cancellationToken, "find_event_handlers",
+            () => code.FindEventHandlersAsync(file, query, offset, limit ?? Math.Min(options.MaxResults, 20), cancellationToken));
 
     [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Maps procedure string/constant candidates to containing Roslyn symbols and distinguishes configured calls from unverified candidates. Comments are not treated as calls.")]
     public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
@@ -66,7 +74,7 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
         Run(cancellationToken, "trace_procedure_to_ui_compact", async () =>
             FlowCompactor.Compact(await flow.TraceProcedureAsync(procedure, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken)));
 
-    [McpServerTool(Name = "trace_procedure_path", ReadOnly = true, Destructive = false), Description("Given an exact C# symbol ID and qualified procedure name, returns one bounded static path with call-site evidence. Direct SQL dependencies retain writes, executions and unclassified references; read-only entries are capped at eight. NotConnected keeps SQL evidence separate. Does not infer remote WCF dispatch or prove runtime execution.")]
+    [McpServerTool(Name = "trace_procedure_path", ReadOnly = true, Destructive = false), Description("Given an exact C# symbol ID and qualified procedure name, returns one static path with call-site evidence. If needed, restarts bounded traversal from discovered WCF host candidates with separate limits and joins on the server symbol. Direct SQL dependencies retain writes, executions and unclassified references; read-only entries are capped at eight. NotConnected keeps SQL evidence separate. Runtime dispatch and execution require verification.")]
     public Task<ProcedurePathResult> TraceProcedurePath(string symbol, string procedure, CancellationToken cancellationToken,
         int? maxDepth = null, int? maxNodes = null) =>
         Run(cancellationToken, "trace_procedure_path", () => flow.TraceProcedurePathAsync(symbol, procedure,
@@ -74,14 +82,24 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
 
     private async Task<T> Run<T>(CancellationToken cancellationToken, string tool, Func<Task<T>> operation, bool requiresCode = true)
     {
+        var queuedAt = Stopwatch.GetTimestamp();
         using (AnalysisTelemetry.Measure("tool.queue")) await executionGate.WaitAsync(cancellationToken);
+        var queueMs = Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds;
         var timer = Stopwatch.StartNew();
         try
         {
-            if (requiresCode && tool is not "load_solution" and not "reload_solution" && code is IRefreshableCodeAnalyzer refreshable)
+            if (requiresCode && tool is not "load_solution" and not "reload_solution")
             {
-                using var freshness = AnalysisTelemetry.Measure("tool.code.freshness");
-                await refreshable.EnsureFreshAsync(cancellationToken);
+                if (code.Status().SolutionPath is null && !string.IsNullOrWhiteSpace(options.SolutionPath))
+                {
+                    using var load = AnalysisTelemetry.Measure("tool.code.default_load");
+                    await code.LoadAsync(options.SolutionPath, cancellationToken);
+                }
+                else if (code is IRefreshableCodeAnalyzer refreshable)
+                {
+                    using var freshness = AnalysisTelemetry.Measure("tool.code.freshness");
+                    await refreshable.EnsureFreshAsync(cancellationToken);
+                }
             }
             using var analysis = AnalysisTelemetry.Measure("tool.operation");
             return await operation();
@@ -91,6 +109,12 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
             logger.LogWarning("{Tool} failed ({ErrorType}).", tool, error.GetType().Name);
             throw;
         }
-        finally { logger.LogInformation("{Tool} completed in {ElapsedMs} ms.", tool, timer.ElapsedMilliseconds); executionGate.Release(); }
+        finally
+        {
+            var executionMs = timer.Elapsed.TotalMilliseconds;
+            executionGate.Release();
+            logger.LogInformation("Tool {Tool} timing: queue {QueueMs:F3} ms, execution {ExecutionMs:F3} ms.",
+                tool, queueMs, executionMs);
+        }
     }
 }
