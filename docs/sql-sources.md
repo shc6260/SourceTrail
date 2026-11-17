@@ -1,6 +1,6 @@
-# SQL 분석 자료 선택과 색인
+# 로컬 SQL 폴더와 색인
 
-`select_database_source`에서 `SqlFiles` 또는 `LiveDatabase`를 선택합니다. 자동 대체하지 않습니다. 시작 설정의 `Database.Mode` 기본값은 기존 호환성을 위해 `LiveDatabase`입니다.
+DB 검색에는 로컬에 저장된 SQL 스크립트를 사용합니다. [Codex 등록 설정](codex-registration.md)에서 `SqlFiles`와 폴더를 지정하거나, 현재 세션에서 `select_database_source`에 아래 입력을 전달하세요.
 
 ## SQL 폴더
 
@@ -16,15 +16,7 @@
 
 INSERT 대상은 Insert, 조회 참조는 ReadCandidate, UPDATE/DELETE/MERGE는 별칭 바인딩 확인이 필요해 Candidate로 표시합니다. 컬럼 사용은 완전한 의미 바인딩/데이터 흐름 분석을 제공하지 않습니다. EXEC 문자열·변수와 sp_executesql은 동적 SQL 경고를 반환하고 실행하지 않습니다. 본문 참조 없음은 업무 영향 없음의 증거가 아닙니다.
 
-## 실제 DB
-
-```json
-{"mode":"LiveDatabase"}
-```
-
-연결 문자열은 서버 설정 또는 `Database__ConnectionString` 환경변수로만 전달합니다. 도구 입력/결과/캐시에는 자격증명을 넣지 않습니다. 기존 sys 카탈로그 SELECT로 프로시저 정의와 의존성을 요청마다 조회합니다. 테이블 행 조회, DML, 프로시저 실행은 하지 않습니다. 현재 LiveDatabase 객체 목록/테이블 상세 조회 도구는 제공하지 않습니다.
-
-파일 결과에는 Source=SqlFiles, 원본 파일, 분석 시각을, DB 결과에는 Source=LiveDatabase, DB명, 조회 시각을 제공합니다. NotFoundInProvidedFiles는 제공된 파일에 없는 상태이며 실제 DB의 부재를 뜻하지 않습니다. NotFoundOrNotVisible은 DB 부재 또는 권한 문제를 구분할 수 없는 상태입니다. 연결 실패 시 SQL 파일로 자동 대체하지 않습니다.
+결과에는 `Source=SqlFiles`, 원본 파일, 분석 시각을 표시합니다. `NotFoundInProvidedFiles`가 반환되면 분석 대상으로 지정한 폴더에 해당 정의가 포함되어 있는지 확인하세요.
 
 ## 캐시와 갱신
 
@@ -34,12 +26,8 @@ SQL 색인은 기본 `%LOCALAPPDATA%\SourceTrail\cache`에 폴더별 JSON으로 
 
 WatchFiles=true이면 파일 감지 후 다음 요청에서 갱신합니다. 이벤트 누락 보완을 위해 다음 요청에서 30초 주기로 전체 목록/내용을 다시 대조합니다. WatchFiles=false이면 각 SQL 요청에서 대조합니다. 즉 조회 중인 한 요청은 로딩된 분석 자료를 사용하며 실시간 DB 실행 결과를 보장하지 않습니다. get_database_status는 마지막 색인 상태를 보고합니다.
 
-LiveDatabase는 현재 캐시 없이 매 요청 조회하므로 이전 모드의 파일 캐시가 섞이지 않습니다. 모드를 바꾸면 이후 DB 분석/흐름은 선택한 자료만 사용합니다.
-
 C# 작업 공간, UI 색인, SQL 파일 색인은 각기 준비됩니다. C# 입력 변경 확인과 디스크 색인 재사용 조건은 [구조와 동작 원리](architecture.md)에 있습니다.
 
 ## 검증
 
 합성 SQL로 개별/통합 파일, 하위 폴더, UTF-16 BOM, 디스크 재사용, 파일 추가·수정·삭제, 감지, 손상 캐시 복구, 동적 SQL, 중복 정의와 모드 전환을 검증합니다.
-
-실제 DB 정상 조회는 접속 설정이 제공되지 않아 미검증입니다. 실제 업무 C# 솔루션도 별도 검증이 필요합니다. 테스트용 Demo 프로젝트는 DB에 연결하지 않습니다.

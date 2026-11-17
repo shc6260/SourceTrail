@@ -2,6 +2,8 @@
 
 C# WinForms의 화면·이벤트에서 메서드와 DB 호출을 찾고, SQL Server 스크립트에서 객체 정의와 참조를 확인하는 읽기 전용 MCP 서버입니다. 로컬에서 stdio로 실행하며 분석 근거를 파일과 줄 번호로 반환합니다.
 
+DB 검색은 **로컬 SQL 파일 폴더를 색인하는 `SqlFiles` 모드**로 진행합니다. 프로시저·테이블·뷰·함수의 정의와 참조를 조사할 때 이 색인을 재사용합니다.
+
 ## 구조와 동작 원리
 
 Codex가 로컬 SourceTrail 서버에 검색을 요청하면, 서버는 질문에 맞는 방식으로 소스와 SQL 파일을 읽습니다.
@@ -57,7 +59,7 @@ DB 스크립트 폴더(.sql 파일이 있는 폴더):
 | 연결 검증 | ping 응답 또는 확인 필요 | 현재 대화에서 MCP 호출 가능 여부 |
 | 분석 검증 | C# 상태, SQL 상태·색인 파일 수, 주요 경고 | 분석 준비 범위와 누락 항목 |
 
-확인하지 못한 항목은 확인 필요로 표시해줘. 분석 대상 소스와 SQL 원본은 읽기만 하고, 운영 DB에는 접속하지 말아줘.
+확인하지 못한 항목은 확인 필요로 표시해줘. 분석 대상 소스와 SQL 원본은 읽기만 해줘. DB 관련 검색은 지정한 로컬 SQL 폴더에서만 하고 SQL Server에 직접 접속하지 말아줘.
 ```
 
 ## Codex에서 사용하는 방법
@@ -89,7 +91,7 @@ SourceTrail MCP로 접수 저장 로직을 찾아줘.
 - [설치·Codex 설정](docs/codex-registration.md) — 등록 예제, 기본 솔루션·SQL 폴더 설정, 연결 확인
 - [사용법과 요청 예제](docs/tools.md) — 화면 이벤트에서 WCF·DB 호출·SQL 정의까지 조사하는 순서
 - [구조와 동작 원리](docs/architecture.md) — 화면 검색, Roslyn 의미 분석, 디스크 캐시
-- [SQL 자료와 캐시](docs/sql-sources.md) — SQL 파일 모드와 실제 DB 모드 설정 및 갱신
+- [SQL 자료와 캐시](docs/sql-sources.md) — 로컬 SQL 폴더 설정과 색인 갱신
 - [지원 범위와 제한](docs/limitations.md) — WCF·TableAdapter 등 원문 확인이 필요한 경우
 
 ## 수동 설치 및 등록
@@ -119,4 +121,4 @@ dotnet restore tests/Fixtures/Broken/Broken.sln
 dotnet test SourceTrail.sln --no-restore
 ```
 
-가상 WinForms와 오류가 있는 프로젝트로 화면 검색, 정적 호출, SQL 파일 분석, 부분 로딩 및 갱신을 검증합니다. 실제 SQL Server 연결은 환경별로 확인하세요.
+가상 WinForms와 오류가 있는 프로젝트로 화면 검색, 정적 호출, SQL 파일 분석, 부분 로딩 및 갱신을 검증합니다.

@@ -5,7 +5,7 @@ Codex 또는 MCP 클라이언트
           │ stdio
     SourceTrail.Mcp
        ├─ Roslyn ── C# 구문 색인 / MSBuildWorkspace 의미 분석
-       ├─ SqlServer ── ScriptDom SQL 파일 분석 / SQL Server 메타데이터 조회
+       ├─ SqlServer ── ScriptDom 로컬 SQL 파일 분석
        └─ Core ── 분석기 계약 / 결과 모델 / C#·SQL 흐름 조합
 ```
 
@@ -15,7 +15,7 @@ Codex 또는 MCP 클라이언트
 |---|---|
 | WinForms 화면·이벤트 | `find_ui_actions`는 C# 프로젝트 폴더의 Designer 이벤트 구독, 화면·메뉴·버튼 문구와 기본 `.resx`, 대응 핸들러를 구문 수준에서 읽습니다. 업무 문장의 단어를 식별자와 문구에 대조하고 일부 동작 별칭으로 후보를 정렬합니다. `search_text`는 현재 디스크 파일을 지정 폴더·확장자로 좁혀 읽습니다. |
 | C# 심볼·호출 | Roslyn의 `MSBuildWorkspace`로 프로젝트와 참조를 읽어 선언과 호출 대상을 해석합니다. `find_database_calls`는 한 메서드에서 제한된 범위로 탐색해 직접 명령, 설정된 래퍼, 일부 생성 TableAdapter `Update` 매핑을 반환합니다. |
-| SQL 정의·참조 | `SqlFiles`는 ScriptDom으로 정의와 직접 참조를 색인합니다. `LiveDatabase`는 SQL Server의 메타데이터를 조회합니다. `find_sql_object`는 파일 색인에서 검색하고 `analyze_procedure`는 선택된 모드에서 프로시저를 분석합니다. |
+| SQL 정의·참조 | `SqlFiles`는 ScriptDom으로 로컬 SQL의 정의와 직접 참조를 색인합니다. `find_sql_object`로 정의 위치를 찾고 `analyze_procedure`로 프로시저의 직접 의존관계를 조회합니다. |
 
 MCP 호스트는 stdout으로 프로토콜 응답을 보내고 stderr로 진단을 남깁니다. 분석기는 한 프로세스에서 활성 솔루션 하나와 SQL 자료 하나를 사용합니다. 분석·자료 전환 작업은 직렬화합니다.
 

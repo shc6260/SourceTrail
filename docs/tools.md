@@ -5,7 +5,7 @@
 1. **화면을 모를 때**는 업무 문장을 `find_ui_actions`에 전달합니다. 상위 후보의 화면·버튼 문구, 이벤트 구독, 핸들러 줄을 확인합니다. 0건이거나 다른 동작이 잡히면 실제 화면 제목이나 메뉴 문구로 다시 찾고, 폼 파일이 확인되면 `find_event_handlers` 또는 Designer 원문에서 이벤트를 확인합니다.
 2. **서비스를 호출하면** 핸들러 본문에서 호출 이름을 읽고, `search_text`의 `directory`와 `extension`으로 서버 소스 범위를 좁힙니다. WCF는 계약, 서버 구현, 필요한 경우 서비스 호스트 설정을 대조합니다. 동명 메서드나 프록시의 `Async` 이름만으로 구현을 확정하지 않습니다.
 3. **DB 실행 위치를 찾을 때**는 확인된 메서드 전체 이름이나 정확한 심볼 ID를 `find_database_calls`에 전달합니다. `FillBy` 조회는 어댑터의 SelectCommand 및 프로시저 매핑을 원문에서 대조합니다. `unresolved`와 `truncated`가 있으면 누락 범위를 표시합니다.
-4. **프로시저 이름이 확인되면** `SqlFiles`에서 `find_sql_object`로 파일·줄을 찾습니다. 이름 부분 일치 검색이므로 반환된 스키마와 이름을 대조합니다. 직접 의존관계나 실제 DB의 정의가 필요하면 `analyze_procedure`를 사용합니다.
+4. **프로시저 이름이 확인되면** `SqlFiles`에서 `find_sql_object`로 파일·줄을 찾습니다. 이름 부분 일치 검색이므로 반환된 스키마와 이름을 대조합니다. 로컬 SQL 정의의 직접 의존관계는 `analyze_procedure`로 확인합니다.
 5. **영향 범위를 조사할 때**는 `find_references`, `find_procedure_usage`, `trace_procedure_to_ui`를 사용합니다. 정적 호출, 문자열·구현 후보, 확인 필요 경로를 나누어 파일·줄을 표시합니다.
 
 복사해서 사용할 요청 예제입니다.
@@ -69,7 +69,7 @@ get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다.
 - DispatchCandidate: 인터페이스 호출의 구현 후보. 실행 대상 확인 필요.
 - ConfiguredProcedureCall: Roslyn으로 해석한 메서드와 외부 DB 래퍼 계약이 일치.
 - ProcedureCommandConfiguration: DbCommand 생성 시 StoredProcedure와 상수 CommandText 설정을 확인. 실행 확인이 아니므로 verified flow에서 제외.
-- SqlDependency: 선택된 자료의 의존성. 출처와 파일/줄 또는 메타데이터 근거를 표시. LiveDatabase의 Access는 Unknown, SqlFiles는 Insert/ReadCandidate 등의 문법 근거를 표시.
+- SqlDependency: 로컬 SQL의 의존관계. 파일·줄과 Insert/ReadCandidate 등의 문법 근거를 표시.
 
 프로시저 주석은 search_text에서 발견할 수 있으나 find_procedure_usage의 호출 결과에는 포함되지 않습니다. 후보는 해당 위치를 포함하는 Roslyn 심볼과 함께 반환합니다.
 
@@ -82,16 +82,13 @@ get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다.
 ## 실패·제한 상태
 
 - NotLoaded: C# 작업 공간 또는 SQL 파일 색인이 아직 로드되지 않은 상태.
-- Partial: 일부 프로젝트 오류, 구현 후보, DB 미설정/실패, 탐색 제한 등.
-- NotConfigured: DB 연결 미설정.
-- Unavailable: DB 연결/조회 실패.
-- NotFoundOrNotVisible: 객체가 없거나 메타데이터 권한으로 보이지 않음.
+- Partial: 일부 프로젝트 오류, 구현 후보, SQL 자료의 미해결 참조 또는 탐색 제한 등. 응답의 진단을 확인합니다.
 - Ambiguous: 동일 프로시저명이 여러 스키마에 존재. schema.name 필요.
 - truncated: 깊이·노드·검색 결과 제한으로 일부 결과 생략.
 
 모호한 C# 이름은 오류와 함께 정확한 심볼 ID 선택을 요청합니다. 재로딩하면 ID와 캐시가 바뀝니다. 코드와 배포된 DB 정의가 같은 버전인지 별도 확인해야 합니다.
 
-NotFoundInProvidedFiles는 제공된 SQL 파일에 없는 상태이며 실제 DB 부재를 의미하지 않습니다. [자료 선택·캐시·갱신](sql-sources.md)을 참고하세요.
+`NotFoundInProvidedFiles`가 반환되면 지정한 SQL 폴더에 해당 정의가 포함되어 있는지 확인하세요. [로컬 SQL 폴더와 색인](sql-sources.md)
 
 `find_database_calls`는 메서드에서 도달할 수 있는 정적 SQL 실행 근거를 요약합니다. 생성 TableAdapter의 저장 명령, 상수가 확정된 직접 DB 명령, 등록된 프로시저 래퍼를 반환합니다. `site`, `via`, `unresolved`의 위치는 `[files의 0 기반 인덱스, 1 기반 줄 번호]`입니다. 상대 경로는 `solutionRoot`를 기준으로 합니다. 메서드별 한 경로를 유지하며, 실행 대상을 해석하지 못한 위치와 탐색 한도는 응답에 표시합니다.
 
