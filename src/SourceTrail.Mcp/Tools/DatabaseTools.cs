@@ -16,9 +16,27 @@ public sealed class DatabaseTools(DatabaseAnalyzer database, SemaphoreSlim execu
     [McpServerTool(Name = "refresh_database_source", ReadOnly = true, Destructive = false), Description("Reconciles SQL files against cache, including additions/changes/deletions. Live definitions are queried fresh by analyze_procedure.")]
     public Task<SqlSourceState> RefreshDatabaseSource(CancellationToken cancellationToken) =>
         Run("refresh_database_source", () => database.RefreshAsync(cancellationToken), cancellationToken);
-    [McpServerTool(Name = "find_sql_object", ReadOnly = true, Destructive = false), Description("Finds parsed file objects with members, references, source file/line and warnings in SqlFiles mode. Definition is opt-in; supports table/procedure/view/function, not every DDL object type.")]
-    public Task<Page<SqlFileObject>> FindSqlObject(string query, CancellationToken cancellationToken, int offset = 0, int limit = 100, bool includeDefinition = false) =>
-        Run("find_sql_object", () => database.FindAsync(query, offset, limit, includeDefinition, cancellationToken), cancellationToken);
+    [McpServerTool(Name = "find_sql_object", ReadOnly = true, Destructive = false), Description("Finds SQL file objects with source locations, members, references and relevant warnings. Set locationsOnly=true when only source locations and warnings are needed. Use get_database_status for all index warnings. Definition is opt-in and cannot be combined with locationsOnly.")]
+    public Task<object> FindSqlObject(string query, CancellationToken cancellationToken, int offset = 0, int limit = 100,
+        bool includeDefinition = false, bool locationsOnly = false)
+    {
+        if (locationsOnly && includeDefinition)
+            throw new ArgumentException("locationsOnly cannot be combined with includeDefinition.");
+
+        return Run<object>("find_sql_object", async () =>
+        {
+            var result = await database.FindAsync(query, offset, limit, includeDefinition, cancellationToken);
+            if (!locationsOnly) return result;
+
+            return new
+            {
+                Items = result.Items.Select(item => new
+                    { item.Database, item.Schema, item.Name, item.Kind, item.File, item.Line, item.Warnings }).ToArray(),
+                result.Total, result.Offset, result.Limit, result.Truncated, result.SnapshotId,
+                result.Warnings, result.IndexStatus, result.IndexWarningCount
+            };
+        }, cancellationToken);
+    }
 
     private async Task<T> Run<T>(string tool, Func<Task<T>> operation, CancellationToken token)
     {

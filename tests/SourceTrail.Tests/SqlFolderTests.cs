@@ -1,6 +1,9 @@
+using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using SourceTrail.Core.Models;
 using SourceTrail.Core.Contracts;
+using SourceTrail.Mcp.Tools;
 using SourceTrail.SqlServer.Metadata;
 namespace SourceTrail.Tests;
 public sealed class SqlFolderTests : IDisposable
@@ -20,12 +23,17 @@ public sealed class SqlFolderTests : IDisposable
         var procedure = await db.AnalyzeAsync("dbo.usp_Save", false, default);
         Assert.Equal("SqlFiles", procedure.Source);
         Assert.Equal("Ready", procedure.Status);
+        Assert.Equal("Ready", procedure.IndexStatus);
+        Assert.Equal(0, procedure.IndexWarningCount);
         Assert.Null(procedure.Definition);
         Assert.Contains(procedure.Dependencies, d => d.Name == "Reception" && d.Access == "Insert" && d.Resolved);
         var objects = await db.FindAsync("Reception", 0, 100, false, default);
         Assert.Equal(2, objects.Items.Single().Members.Count);
         Assert.False(objects.Items.Single().Members[0].Nullable);
         Assert.Empty(objects.Items.Single().Definition);
+        Assert.Equal("Ready", objects.IndexStatus);
+        Assert.Equal(0, objects.IndexWarningCount);
+        Assert.Empty(objects.Warnings);
     }
     [Fact]
     public async Task ReusesDiskCacheAndReconcilesAddedModifiedDeletedFiles()
@@ -54,10 +62,18 @@ public sealed class SqlFolderTests : IDisposable
         Assert.Contains((await db.AnalyzeAsync("dbo.A", false, default)).Warnings, w => w.Contains("Dynamic"));
         Write("duplicate.sql", "CREATE PROCEDURE dbo.A AS SELECT 1;");
         await db.RefreshAsync(default);
-        Assert.Equal("Ambiguous", (await db.AnalyzeAsync("dbo.A", false, default)).Status);
-        Assert.Equal("NotFoundInProvidedFiles", (await db.AnalyzeAsync("Missing", false, default)).Status);
+        var ambiguous = await db.AnalyzeAsync("dbo.A", false, default);
+        Assert.Equal("Ambiguous", ambiguous.Status);
+        Assert.Equal("Partial", ambiguous.IndexStatus);
+        Assert.Contains(ambiguous.Warnings, w => w.Contains("Multiple definitions"));
+        var missing = await db.AnalyzeAsync("Missing", false, default);
+        Assert.Equal("NotFoundInProvidedFiles", missing.Status);
+        Assert.Equal(db.Status().SnapshotId, missing.SnapshotId);
+        Assert.Equal(db.Status().Warnings.Count, missing.IndexWarningCount);
         await db.SelectAsync("LiveDatabase", null, default);
-        Assert.Equal("NotConfigured", (await db.AnalyzeAsync("dbo.A", false, default)).Status);
+        var live = await db.AnalyzeAsync("dbo.A", false, default);
+        Assert.Equal("NotConfigured", live.Status);
+        Assert.Null(live.IndexWarningCount);
         await Assert.ThrowsAsync<ArgumentException>(() => db.SelectAsync("SqlFiles", Path.Combine(root, "absent"), default));
         Assert.Equal("LiveDatabase", db.Status().Mode);
     }
@@ -83,6 +99,83 @@ public sealed class SqlFolderTests : IDisposable
         var state = await db.SelectAsync("SqlFiles", Scripts, default);
         Assert.Equal("Partial", state.Status); Assert.NotEmpty(state.Warnings);
         Assert.Single((await db.FindAsync("A", 0, 100, false, default)).Items);
+    }
+    [Fact]
+    public async Task SearchSummarizesIndexWarningsAndKeepsRelevantDiagnostics()
+    {
+        Write("searched.sql", "CREATE PROCEDURE dbo.P AS EXEC(N'SELECT 1');\nGO\nCREATE PROCEDURE !!!");
+        Write("duplicate.sql", "CREATE PROCEDURE dbo.P AS SELECT 1;");
+        Write("unrelated.sql", "CREATE PROCEDURE !!!");
+        using var db = new DatabaseAnalyzer(Options);
+        await db.SelectAsync("SqlFiles", Scripts, default);
+
+        var result = await db.FindAsync("dbo.P", 0, 2, false, default);
+        var status = db.Status();
+        Assert.Equal("Partial", result.IndexStatus);
+        Assert.Equal(status.SnapshotId, result.SnapshotId);
+        Assert.Equal(status.Warnings.Count, result.IndexWarningCount);
+        Assert.Contains(status.Warnings, w => w.Contains("unrelated.sql"));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("unrelated.sql"));
+        Assert.Contains(result.Warnings, w => w.Contains("searched.sql"));
+        Assert.Contains(result.Items.Single(o => o.File.EndsWith("searched.sql")).Warnings, w => w.Contains("Dynamic"));
+
+        var firstPage = await db.FindAsync("dbo.P", 0, 1, false, default);
+        Assert.Single(firstPage.Items);
+        Assert.True(firstPage.Truncated);
+        Assert.Contains(firstPage.Warnings, w => w.StartsWith("Duplicate definitions:"));
+
+        var missing = await db.FindAsync("missing", 0, 1, false, default);
+        Assert.Empty(missing.Items);
+        Assert.Empty(missing.Warnings);
+        Assert.Equal("Partial", missing.IndexStatus);
+        Assert.Equal(status.Warnings.Count, missing.IndexWarningCount);
+    }
+    [Fact]
+    public async Task SqlLocationOptionKeepsCandidatesAndWarningsInToolResponse()
+    {
+        Write("one.sql", "CREATE PROCEDURE dbo.P @Id int AS EXEC(N'SELECT 1');");
+        Write("two.sql", "CREATE PROCEDURE dbo.P AS SELECT 2;");
+        using var db = new DatabaseAnalyzer(Options);
+        using var gate = new SemaphoreSlim(1, 1);
+        var tool = new DatabaseTools(db, gate, NullLogger<DatabaseTools>.Instance);
+        const string query = "dbo.P";
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var detailed = JsonSerializer.SerializeToElement(await tool.FindSqlObject(query, default, limit: 1), options);
+        var locations = JsonSerializer.SerializeToElement(await tool.FindSqlObject(query, default, limit: 1, locationsOnly: true), options);
+        var item = locations.GetProperty("items")[0];
+        var fullItem = detailed.GetProperty("items")[0];
+        foreach (var name in new[] { "database", "schema", "name", "kind", "file", "line", "warnings" })
+            Assert.True(JsonElement.DeepEquals(fullItem.GetProperty(name), item.GetProperty(name)), name);
+        foreach (var name in new[] { "total", "offset", "limit", "truncated", "warnings", "indexStatus", "indexWarningCount" })
+            Assert.True(JsonElement.DeepEquals(detailed.GetProperty(name), locations.GetProperty(name)), name);
+        foreach (var name in new[] { "members", "references", "definition", "constraints" })
+        {
+            Assert.True(fullItem.TryGetProperty(name, out _), name);
+            Assert.False(item.TryGetProperty(name, out _), name);
+        }
+        Assert.True(locations.GetProperty("truncated").GetBoolean());
+        Assert.Contains("Duplicate definitions", locations.GetProperty("warnings")[0].GetString());
+    }
+    [Fact]
+    public async Task ProcedureAnalysisSummarizesIndexWarningsAndKeepsRelevantDiagnostics()
+    {
+        Write("target.sql", "CREATE PROCEDURE dbo.P AS BEGIN EXEC(N'SELECT 1'); SELECT Id FROM dbo.Missing; END;\nGO\nCREATE PROCEDURE !!!");
+        Write("unrelated.sql", "CREATE PROCEDURE !!!");
+        using var db = new DatabaseAnalyzer(Options);
+
+        var result = await db.AnalyzeAsync("dbo.P", true, default);
+        var status = db.Status();
+        Assert.Equal("Partial", result.Status);
+        Assert.Equal(status.Status, result.IndexStatus);
+        Assert.Equal(status.SnapshotId, result.SnapshotId);
+        Assert.Equal(status.Warnings.Count, result.IndexWarningCount);
+        Assert.Contains("CREATE PROCEDURE dbo.P", result.Definition);
+        Assert.Contains(result.Dependencies, d => d.Name == "Missing" && !d.Resolved);
+        Assert.Contains(result.Warnings, w => w.Contains("Dynamic"));
+        Assert.Contains(result.Warnings, w => w.Contains("Unresolved references"));
+        Assert.Contains(result.Warnings, w => w.Contains("target.sql"));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("unrelated.sql"));
+        Assert.Contains(status.Warnings, w => w.Contains("unrelated.sql"));
     }
     [Fact]
     public async Task ChangeTrackerDetectsAddDeleteAndConfigChanges()

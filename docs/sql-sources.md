@@ -14,6 +14,10 @@ DB 검색에는 로컬에 저장된 SQL 스크립트를 사용합니다. [Codex 
 
 `find_sql_object`는 객체/멤버/참조/파일/줄을 보여줍니다. 원본 정의는 includeDefinition=true일 때 반환합니다. `analyze_procedure`는 선택 모드에 따라 공통 ProcedureAnalysis를 반환합니다. SQL 파일 모드는 database.schema.name도 허용합니다. 중복 정의는 자동 병합하지 않습니다. 이름이 없는 기본 스키마, CTE, 별칭, 임시 객체는 후보 또는 미해결 상태로 남을 수 있습니다.
 
+파일과 줄만 찾을 때는 `find_sql_object`에 `locationsOnly=true`를 전달합니다. 같은 후보·순서·페이지 정보와 색인 상태, 관련 경고를 반환하며 객체별 본문·멤버·참조·제약조건을 생략합니다. `includeDefinition=true`는 상세 조회에서 사용할 수 있습니다.
+
+두 도구의 `indexStatus`와 `indexWarningCount`는 해당 `snapshotId`의 전체 색인 상태와 경고 건수입니다. 각 응답의 `warnings`에는 관련 파일·객체 진단이 포함되며, 색인 전체 경고는 `get_database_status`에서 확인합니다. 검색 결과가 비어 있고 색인이 `Partial`이면 제공된 스크립트에서 객체를 찾지 못한 이유를 확인해야 합니다. `trace_procedure_path`는 결과별 SQL 경고 건수를 `sqlWarningCount`, 색인 전체 경고 건수를 `sqlIndexWarningCount`로 반환합니다.
+
 INSERT 대상은 Insert, 조회 참조는 ReadCandidate, UPDATE/DELETE/MERGE는 별칭 바인딩 확인이 필요해 Candidate로 표시합니다. 컬럼 사용은 완전한 의미 바인딩/데이터 흐름 분석을 제공하지 않습니다. EXEC 문자열·변수와 sp_executesql은 동적 SQL 경고를 반환하고 실행하지 않습니다. 본문 참조 없음은 업무 영향 없음의 증거가 아닙니다.
 
 결과에는 `Source=SqlFiles`, 원본 파일, 분석 시각을 표시합니다. `NotFoundInProvidedFiles`가 반환되면 분석 대상으로 지정한 폴더에 해당 정의가 포함되어 있는지 확인하세요.

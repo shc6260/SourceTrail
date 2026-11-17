@@ -66,6 +66,9 @@ public sealed class SqlFolderIndex(DatabaseOptions options) : IDisposable
 
     private void Changed(object sender, FileSystemEventArgs e) => Interlocked.Exchange(ref dirty, 1);
     public static string Key(SqlFileObject o) => string.Join(".", o.Database, o.Schema, o.Name);
+    internal IReadOnlyList<string> FileWarnings(string file) => files.TryGetValue(file, out var cached) ? cached.Warnings : [];
+    internal static string DuplicateDefinitionWarning(string key) =>
+        $"Duplicate definitions: {key}. Select the intended export/database; definitions are not merged.";
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
     private static IEnumerable<string> Enumerate(string root, List<string> warnings)
     {
@@ -146,7 +149,7 @@ public sealed class SqlFolderIndex(DatabaseOptions options) : IDisposable
     {
         warnings.AddRange(next.Values.SelectMany(f => f.Warnings));
         foreach (var group in next.Values.SelectMany(f => f.Objects).Where(o => o.Kind != "TablePatch").GroupBy(Key, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
-            warnings.Add($"Duplicate definitions: {group.Key}. Select the intended export/database; definitions are not merged.");
+            warnings.Add(DuplicateDefinitionWarning(group.Key));
         var allObjects = next.Values.SelectMany(f => f.Objects).ToArray();
         var definitions = allObjects.Where(o => o.Kind != "TablePatch").ToArray();
         var patches = allObjects.Where(o => o.Kind == "TablePatch").GroupBy(Key, StringComparer.OrdinalIgnoreCase)

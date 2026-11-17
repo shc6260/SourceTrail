@@ -5,7 +5,7 @@
 1. **화면을 모를 때**는 업무 문장을 `find_ui_actions`에 전달합니다. 상위 후보의 화면·버튼 문구, 이벤트 구독, 핸들러 줄을 확인합니다. 0건이거나 다른 동작이 잡히면 실제 화면 제목이나 메뉴 문구로 다시 찾고, 폼 파일이 확인되면 `find_event_handlers` 또는 Designer 원문에서 이벤트를 확인합니다.
 2. **서비스를 호출하면** 핸들러 본문에서 호출 이름을 읽고, `search_text`의 `directory`와 `extension`으로 서버 소스 범위를 좁힙니다. WCF는 계약, 서버 구현, 필요한 경우 서비스 호스트 설정을 대조합니다. 동명 메서드나 프록시의 `Async` 이름만으로 구현을 확정하지 않습니다.
 3. **DB 실행 위치를 찾을 때**는 확인된 메서드 전체 이름이나 정확한 심볼 ID를 `find_database_calls`에 전달합니다. `FillBy` 조회는 어댑터의 SelectCommand 및 프로시저 매핑을 원문에서 대조합니다. `unresolved`와 `truncated`가 있으면 누락 범위를 표시합니다.
-4. **프로시저 이름이 확인되면** `SqlFiles`에서 `find_sql_object`로 파일·줄을 찾습니다. 이름 부분 일치 검색이므로 반환된 스키마와 이름을 대조합니다. 로컬 SQL 정의의 직접 의존관계는 `analyze_procedure`로 확인합니다.
+4. **프로시저 이름이 확인되면** `SqlFiles`에서 `find_sql_object`의 `locationsOnly=true`로 파일·줄을 찾습니다. 이름 부분 일치 검색이므로 반환된 스키마와 이름을 대조합니다. 로컬 SQL 정의의 직접 의존관계는 `analyze_procedure`로 확인합니다.
 5. **영향 범위를 조사할 때**는 `find_references`, `find_procedure_usage`, `trace_procedure_to_ui`를 사용합니다. 정적 호출, 문자열·구현 후보, 확인 필요 경로를 나누어 파일·줄을 표시합니다.
 
 복사해서 사용할 요청 예제입니다.
@@ -41,6 +41,7 @@
 | get_database_status | `{}` |
 | refresh_database_source | `{}` |
 | find_sql_object | `{"query":"Reception","includeDefinition":false}` |
+| find_sql_object · 정의 위치 | `{"query":"dbo.usp_update_SmartInfoReception","limit":1,"locationsOnly":true}` |
 | ping | `{}` |
 | load_solution | `{"solutionPath":"D:\\Projects\\Sample\\Sample.sln"}` |
 | get_analysis_status | `{}` |

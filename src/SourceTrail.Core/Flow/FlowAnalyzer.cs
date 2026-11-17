@@ -65,7 +65,10 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
             dependencies, definition.Dependencies.Count,
             warnings.Count, definition.Warnings.Count, path is null
                 ? "No path found within the search bounds. Check WCF boundaries and adapter command mappings in source. SQL dependencies are independently analyzed."
-                : null);
+                : null)
+        {
+            SqlIndexWarningCount = definition.IndexWarningCount
+        };
     }
 
     // Naming similarity only orders candidates; the returned path still requires call-site evidence.
@@ -180,6 +183,8 @@ public sealed class FlowAnalyzer(ICodeAnalyzer code, IProcedureAnalyzer sql)
             var analyzed = await sql.AnalyzeAsync(next.Name, false, cancellationToken);
             if (analyzed.Status != "Ready") graph.Partial = true;
             foreach (var warning in analyzed.Warnings) graph.Warnings.Add(warning);
+            if (analyzed.IndexWarningCount is > 0)
+                graph.Warnings.Add($"SQL file index is {analyzed.IndexStatus} ({analyzed.IndexWarningCount} diagnostics); use get_database_status for details.");
             if (next.Depth >= graph.MaxDepth)
             {
                 if (analyzed.Dependencies.Count > 0) graph.Truncated = true;

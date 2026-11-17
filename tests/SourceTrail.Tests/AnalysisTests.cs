@@ -223,6 +223,21 @@ public sealed class AnalysisTests(LoadedSolution fixture)
     }
 
     [Fact]
+    public async Task ForwardTraceKeepsSqlIndexSummary()
+    {
+        var symbol = await Find("Demo.Data.Repository.Save()");
+        var flow = new FlowAnalyzer(_code, new FakeDatabase(indexWarningCount: 504));
+        var graph = await flow.TraceCodeAsync(symbol.Id, 8, 200, Token);
+        Assert.Equal("Partial", graph.Status);
+        Assert.Single(graph.Warnings, w => w.Contains("504 diagnostics"));
+        Assert.Contains(graph.Nodes, n => n.Name == "DemoTable");
+
+        var path = await flow.TraceProcedurePathAsync(symbol.Id, "dbo.usp_TestSave", 8, 200, Token);
+        Assert.Equal(1, path.SqlWarningCount);
+        Assert.Equal(504, path.SqlIndexWarningCount);
+    }
+
+    [Fact]
     public async Task ReverseTraceIncludesUiAndEventSubscription()
     {
         var result = await new FlowAnalyzer(_code, new FakeDatabase()).TraceProcedureAsync("dbo.usp_TestSave", 8, 200, Token);
@@ -280,11 +295,14 @@ public sealed class AnalysisTests(LoadedSolution fixture)
         Assert.NotEqual(oldSymbol.Id, fresh.Id);
     }
 
-    private sealed class FakeDatabase : IProcedureAnalyzer
+    private sealed class FakeDatabase(int? indexWarningCount = null) : IProcedureAnalyzer
     {
         public Task<ProcedureAnalysis> AnalyzeAsync(string procedure, bool includeDefinition, CancellationToken cancellationToken) =>
-            Task.FromResult(new ProcedureAnalysis("Ready", procedure, "dbo", "Fixture", null,
+            Task.FromResult(new ProcedureAnalysis(indexWarningCount is null ? "Ready" : "Partial", procedure, "dbo", "Fixture", null,
                 [new SqlObject(null, "Fixture", "dbo", "DemoTable", "USER_TABLE", "Unknown", true, false, false)],
-                ["SQL dependencies in this test are mocked, not live database validation."]));
+                ["SQL dependencies in this test are mocked, not live database validation."])
+            {
+                IndexStatus = indexWarningCount is null ? null : "Partial", IndexWarningCount = indexWarningCount
+            });
     }
 }

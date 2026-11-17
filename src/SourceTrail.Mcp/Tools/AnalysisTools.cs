@@ -57,7 +57,7 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_procedure_usage", () => code.ProcedureUsagesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Analyzes a procedure from the selected SQL source (SqlFiles or LiveDatabase). Returns provenance and direct dependencies; definition is opt-in. Does not execute SQL.")]
+    [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Analyzes a procedure from the selected SQL source (SqlFiles or LiveDatabase). Returns provenance and direct dependencies; definition is opt-in. SqlFiles includes relevant warnings and an index summary. Use get_database_status for all index warnings. Does not execute SQL.")]
     public Task<ProcedureAnalysis> AnalyzeProcedure(string procedure, CancellationToken cancellationToken, bool includeDefinition = false) =>
         Run(cancellationToken, "analyze_procedure", () => sql.AnalyzeAsync(procedure, includeDefinition, cancellationToken), requiresCode: false);
 

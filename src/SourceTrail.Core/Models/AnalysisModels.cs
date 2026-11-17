@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SourceTrail.Core.Models;
 
 public sealed record AnalysisDiagnostic(string Severity, string Message, string? Project = null);
@@ -46,7 +48,15 @@ public sealed record SqlObject(string? Server, string? Database, string? Schema,
     string Kind, string Access, bool Resolved, bool CallerDependent, bool Ambiguous, string? File = null, int? Line = null);
 public sealed record ProcedureAnalysis(string Status, string Procedure, string? Schema,
     string? Database, string? Definition, IReadOnlyList<SqlObject> Dependencies,
-    IReadOnlyList<string> Warnings, string Source = "LiveDatabase", string? SourcePath = null, DateTimeOffset? AnalyzedAt = null);
+    IReadOnlyList<string> Warnings, string Source = "LiveDatabase", string? SourcePath = null, DateTimeOffset? AnalyzedAt = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SnapshotId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexStatus { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? IndexWarningCount { get; init; }
+}
 public sealed record FlowNode(string Id, string Name, string Kind, string? Project = null,
     string? File = null, int? Line = null, string? Schema = null, string? Database = null);
 public sealed record FlowEdge(string From, string To, string RelationType, string Evidence,
@@ -59,7 +69,11 @@ public sealed record ProcedurePathStep(string Target, string RelationType, strin
 public sealed record ProcedurePathResult(string PathStatus, string? SnapshotId, FlowNode Entry,
     string Procedure, IReadOnlyList<ProcedurePathStep> Steps, bool SearchTruncated, string CodeStatus,
     string SqlStatus, string? SqlFile, IReadOnlyList<SqlObject> DirectDependencies, int DependencyCount,
-    int CodeWarningCount, int SqlWarningCount, string? Gap);
+    int CodeWarningCount, int SqlWarningCount, string? Gap)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SqlIndexWarningCount { get; init; }
+}
 
 public sealed class AnalysisOptions
 {

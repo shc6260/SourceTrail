@@ -51,7 +51,7 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
         }
         finally { gate.Release(); }
     }
-    public async Task<Page<SqlFileObject>> FindAsync(string query, int offset, int limit, bool includeDefinition, CancellationToken token)
+    public async Task<SqlObjectSearchResult> FindAsync(string query, int offset, int limit, bool includeDefinition, CancellationToken token)
     {
         if (offset < 0 || limit is < 1 or > 1000) throw new ArgumentException("offset >= 0 and limit 1..1000 required.");
         await gate.WaitAsync(token);
@@ -61,8 +61,17 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
             await folder.EnsureAsync(token);
             var matches = folder.Objects.Where(o => SqlFolderIndex.Key(o).Contains(query, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(SqlFolderIndex.Key).ToArray();
-            return new(matches.Skip(offset).Take(limit).Select(o => includeDefinition ? o : o with { Definition = "" }).ToArray(),
-                matches.Length, offset, limit, offset + limit < matches.Length, folder.Status.SnapshotId, folder.Status.Warnings);
+            var items = matches.Skip(offset).Take(limit).Select(o => includeDefinition ? o : o with { Definition = "" }).ToArray();
+            var itemKeys = items.Select(SqlFolderIndex.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var duplicates = matches.Where(o => itemKeys.Contains(SqlFolderIndex.Key(o)))
+                .GroupBy(SqlFolderIndex.Key, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Skip(1).Any())
+                .Select(group => SqlFolderIndex.DuplicateDefinitionWarning(group.Key));
+            var warnings = items.Select(o => o.File).Distinct(StringComparer.OrdinalIgnoreCase)
+                .SelectMany(folder.FileWarnings).Concat(duplicates).Distinct(StringComparer.Ordinal).ToArray();
+            var status = folder.Status;
+            return new(items, matches.Length, offset, limit, items.Length < matches.Length - offset,
+                status.SnapshotId, warnings, status.Status, status.Warnings.Count);
         }
         finally { gate.Release(); }
     }
@@ -83,20 +92,27 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
     private async Task<ProcedureAnalysis> AnalyzeFilesAsync(string procedure, bool includeDefinition, CancellationToken token)
     {
         await folder.EnsureAsync(token);
+        var index = folder.Status;
         var candidates = FindProcedures(procedure);
         if (candidates.Length != 1)
             return new(candidates.Length == 0 ? "NotFoundInProvidedFiles" : "Ambiguous", procedure, null, null, null, [],
-                [candidates.Length == 0 ? "Not found in provided scripts; this does not prove absence in the database." : "Multiple definitions match; select the database/schema/export."], mode, folder.Status.Folder, folder.Status.AnalyzedAt);
+                [candidates.Length == 0 ? "Not found in provided scripts; this does not prove absence in the database." : "Multiple definitions match; select the database/schema/export."], mode, index.Folder, index.AnalyzedAt)
+            {
+                SnapshotId = index.SnapshotId, IndexStatus = index.Status, IndexWarningCount = index.Warnings.Count
+            };
         var selected = candidates[0];
         var warnings = new List<string>(selected.Warnings);
-        warnings.AddRange(folder.Status.Warnings);
+        warnings.AddRange(folder.FileWarnings(selected.File));
         var dependencies = selected.References.Select(reference => ResolveDependency(selected, reference))
             .Distinct().ToArray();
         if (dependencies.Any(d => !d.Resolved)) warnings.Add("Unresolved references may be missing scripts, CTEs, aliases, temporary objects or cross-database references; verification required.");
         warnings.Add("Static script dependencies do not prove execution; column binding, aliases, dynamic SQL and constraints require further verification.");
-        return new(selected.Warnings.Count == 0 && folder.Status.Status == "Ready" && dependencies.All(d => d.Resolved) ? "Ready" : "Partial",
+        return new(selected.Warnings.Count == 0 && index.Status == "Ready" && dependencies.All(d => d.Resolved) ? "Ready" : "Partial",
             string.Join(".", selected.Schema, selected.Name), selected.Schema, selected.Database, includeDefinition ? selected.Definition : null,
-            dependencies, warnings.Distinct().ToArray(), mode, selected.File, folder.Status.AnalyzedAt);
+            dependencies, warnings.Distinct().ToArray(), mode, selected.File, index.AnalyzedAt)
+        {
+            SnapshotId = index.SnapshotId, IndexStatus = index.Status, IndexWarningCount = index.Warnings.Count
+        };
     }
 
 
