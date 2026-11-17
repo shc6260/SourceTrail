@@ -60,6 +60,24 @@ DB 스크립트 폴더(.sql 파일이 있는 폴더):
 확인하지 못한 항목은 확인 필요로 표시해줘. 분석 대상 소스와 SQL 원본은 읽기만 하고, 운영 DB에는 접속하지 말아줘.
 ```
 
+## Codex에서 사용하는 방법
+
+설치 결과에서 `ping`이 `pong`으로 확인되면 Codex 대화창에 평소 업무 질문을 입력합니다. 이 조사에 SourceTrail을 쓰길 원하면 질문에 **“SourceTrail MCP로”**를 붙이세요. 아래 예시는 그대로 복사해 사용할 수 있습니다.
+
+```text
+SourceTrail MCP로 접수 저장 로직을 찾아줘.
+저장 버튼 이벤트부터 서비스와 DB 호출까지 따라가고, 확인된 프로시저의 SQL 정의도 찾아줘.
+단계별 파일·줄 번호를 보여주고, 후보이거나 연결을 확인하지 못한 부분은 확인 필요로 표시해줘.
+```
+
+| 알고 있는 정보 | 이렇게 요청하세요 | Codex가 사용할 도구 |
+|---|---|---|
+| 업무 동작만 앎 | “SourceTrail MCP로 검사 결과 저장 버튼과 이벤트를 찾아줘.” | `find_ui_actions`로 후보를 찾고, 0건이면 메뉴·화면 제목이나 Designer 원문을 확인합니다. |
+| 서버 메서드명을 앎 | “SourceTrail MCP로 `Set_InfoResult`가 호출하는 DB 프로시저와 파일·줄을 찾아줘.” | `search_text`로 서버 구현 위치를 찾고, 확인된 메서드를 `find_database_calls`로 조사합니다. `FillBy` 조회는 어댑터 원문을 확인합니다. |
+| 프로시저명을 앎 | “SourceTrail MCP로 `dbo.usp_update_SmartInfoReception` 정의와 직접 의존관계를 찾아줘.” | `find_sql_object`로 정의 위치를 찾고, `analyze_procedure`로 참조를 확인합니다. |
+
+설치 때 설정한 솔루션과 SQL 폴더를 그대로 쓰면 질문마다 경로를 입력할 필요가 없습니다. 다른 대상을 조사할 때는 `.sln`이나 SQL 폴더 경로를 질문에 적으세요. [도구별 입력 예제와 영향 범위 조사](docs/tools.md)
+
 ## 문서 바로가기
 
 - [설치·Codex 설정](docs/codex-registration.md) — 등록 예제, 기본 솔루션·SQL 폴더 설정, 연결 확인
@@ -79,13 +97,6 @@ dotnet publish src/SourceTrail.Mcp/SourceTrail.Mcp.csproj -c Release -o artifact
 ```
 
 MCP 클라이언트에 명령을 `dotnet`, 인자를 `artifacts/server/SourceTrail.Mcp.dll`의 **절대 경로**로 등록합니다. Roslyn BuildHost를 함께 사용하므로 publish 폴더 전체를 보관하세요. Codex의 복사 가능한 설정과 연결 확인 순서는 [Codex 등록 및 설정](docs/codex-registration.md)에 있습니다.
-
-## 처음 사용하는 방법
-
-1. MCP에서 `ping`을 호출해 `pong`을 확인합니다.
-2. 의미 분석용 솔루션은 `load_solution`에 절대 `.sln` 경로를 전달하거나 시작 설정에 지정합니다. 시작 설정이 있으면 `find_ui_actions`와 `search_text`는 의미 분석 작업 공간을 열기 전에 실행할 수 있습니다.
-3. SQL 스크립트를 쓸 때는 `select_database_source`에서 `SqlFiles`와 절대 폴더 경로를 지정합니다. 반복 사용 시 시작 설정으로 등록할 수 있습니다.
-4. 화면을 모를 때는 “접수 저장 로직을 찾아줘. 화면 이벤트, 서비스 호출, DB 실행 위치를 파일과 줄로 보여줘”처럼 요청합니다. 첫 후보의 이벤트와 본문을 확인하고, 서비스·DB·SQL 도구는 확인된 이름이 있을 때 사용합니다.
 
 ## 연결 후 확인할 것
 
