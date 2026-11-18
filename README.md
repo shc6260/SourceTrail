@@ -1,4 +1,4 @@
-# SourceTrail MCP
+# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP
 
 C# WinForms의 화면·이벤트에서 메서드와 DB 호출을 찾고, SQL Server 스크립트에서 객체 정의와 참조를 확인하는 읽기 전용 MCP 서버입니다. 로컬에서 stdio로 실행하며 분석 근거를 파일과 줄 번호로 반환합니다.
 
