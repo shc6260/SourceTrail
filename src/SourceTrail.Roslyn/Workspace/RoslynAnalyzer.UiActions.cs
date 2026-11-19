@@ -39,43 +39,37 @@ public sealed partial class RoslynAnalyzer
         RequireText(query, nameof(query));
         if (query.Length > 200) throw new ArgumentException("Use a task phrase of at most 200 characters.", nameof(query));
         if (limit is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(limit), "Use a limit between 1 and 20.");
-        var terms = Words(query).Where(word => !UiQueryFillers.Contains(word))
+        var terms = QueryWords(query).Where(word => !UiQueryFillers.Contains(word))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (terms.Length == 0) throw new ArgumentException("Provide a screen or action keyword.", nameof(query));
 
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var solution = ValidateSolutionPath(_state.SolutionPath ?? _options.SolutionPath);
-            var root = GetSolutionRoot();
-            var inputs = CollectUiInputs(solution, root);
-            var fingerprint = UiFingerprint(solution, inputs);
-            string state = "Memory";
-            if (_uiIndex?.Fingerprint != fingerprint)
-            {
-                var disk = string.IsNullOrWhiteSpace(_options.CodeCacheDirectory) ? null
-                    : new DiskCodeIndex(_options.CodeCacheDirectory, solution, _options, log);
-                _uiIndex = disk is null ? null : await disk.ReadItemAsync<UiIndex>(fingerprint, "ui-actions", cancellationToken);
-                state = "Disk";
-                if (_uiIndex is null)
-                {
-                    state = "Built";
-                    _uiIndex = await BuildUiIndexAsync(fingerprint, inputs, cancellationToken);
-                    if (UiFingerprint(solution, inputs) != fingerprint)
-                    {
-                        _uiIndex = null;
-                        throw new IOException("A UI source changed during indexing. Retry the query.");
-                    }
-                    if (disk is not null)
-                        await disk.SaveItemAsync(fingerprint, "ui-actions", _uiIndex, cancellationToken);
-                }
-            }
-
-            var candidates = RankUiActions(_uiIndex, terms).ToArray();
-            return new("StaticCandidates", state, _uiIndex.Screens.Length, candidates.Length,
+            var state = await EnsureUiIndexAsync(cancellationToken);
+            var candidates = RankUiActions(_uiIndex!, terms).ToArray();
+            return new("StaticCandidates", state, _uiIndex!.Screens.Length, candidates.Length,
                 candidates.Length > limit, candidates.Take(limit).ToArray());
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<string> EnsureUiIndexAsync(CancellationToken token)
+    {
+        var solution = ValidateSolutionPath(_state.SolutionPath ?? _options.SolutionPath);
+        var inputs = CollectUiInputs(solution, GetSolutionRoot());
+        var fingerprint = UiFingerprint(solution, inputs);
+        if (_uiIndex?.Fingerprint == fingerprint) return "Memory";
+        var disk = string.IsNullOrWhiteSpace(_options.CodeCacheDirectory) ? null
+            : new DiskCodeIndex(_options.CodeCacheDirectory, solution, _options, log, requireCacheWrites);
+        _uiIndex = disk is null ? null : await disk.ReadItemAsync<UiIndex>(fingerprint, "ui-actions", token);
+        if (_uiIndex is not null) return "Disk";
+        var built = await BuildUiIndexAsync(fingerprint, inputs, token);
+        if (UiFingerprint(solution, inputs) != fingerprint)
+            throw new IOException("A UI source changed during indexing. Retry the query.");
+        if (disk is not null) await disk.SaveItemAsync(fingerprint, "ui-actions", built, token);
+        _uiIndex = built;
+        return "Built";
     }
 
     private static UiInput[] CollectUiInputs(string solution, string root)
@@ -90,6 +84,7 @@ public sealed partial class RoslynAnalyzer
             try { folders.Add(Path.GetDirectoryName(ResolveSolutionPath(root, project))!); }
             catch (ArgumentException) { } // A project behind a reparse point is outside the searchable scope.
         }
+        if (folders.Count == 0) folders.Add(root);
         var roots = folders.Where(folder => !folders.Any(other => !folder.Equals(other, StringComparison.OrdinalIgnoreCase) &&
             folder.StartsWith(Path.TrimEndingDirectorySeparator(other) + Path.DirectorySeparatorChar,
                 StringComparison.OrdinalIgnoreCase)));
@@ -110,9 +105,9 @@ public sealed partial class RoslynAnalyzer
 
     private static string UiFingerprint(string solution, IEnumerable<UiInput> inputs)
     {
-        var stamps = new StringBuilder();
+        var stamps = new StringBuilder(solution).Append('\n');
         foreach (var path in inputs.SelectMany(input => new[] { input.Designer, input.Source, input.Resources })
-            .Prepend(solution).OfType<string>())
+            .Prepend(File.Exists(solution) ? solution : null).OfType<string>())
         {
             var file = new FileInfo(path);
             stamps.Append(path).Append('\0').Append(file.Length).Append('\0')
@@ -328,6 +323,26 @@ public sealed partial class RoslynAnalyzer
 
     private static IEnumerable<string> Words(string text) =>
         UiWords.Matches(text.Normalize(NormalizationForm.FormKC)).Select(match => match.Value.ToLowerInvariant());
+
+    // Normalize only query-side Korean screen+action compounds, never identifiers in the index.
+    private static IEnumerable<string> QueryWords(string query)
+    {
+        var actions = UiActionAliases.SelectMany(group => group)
+            .Where(word => word.All(character => character is >= '가' and <= '힣'))
+            .OrderByDescending(word => word.Length).ToArray();
+        foreach (var word in Words(query))
+        {
+            var suffix = word.All(character => character is >= '가' and <= '힣')
+                ? actions.FirstOrDefault(action => word.Length >= action.Length + 2 &&
+                    word.EndsWith(action, StringComparison.Ordinal)) : null;
+            if (suffix is null) yield return word;
+            else
+            {
+                yield return word[..^suffix.Length];
+                yield return suffix;
+            }
+        }
+    }
     private static string? Owner(SyntaxNode node) => node.FirstAncestorOrSelf<TypeDeclarationSyntax>()?.Identifier.ValueText;
     private static string NamespaceOf(SyntaxNode node) => string.Join(".", node.Ancestors()
         .OfType<BaseNamespaceDeclarationSyntax>().Reverse().Select(parent => parent.Name.ToString()));

@@ -6,24 +6,20 @@ namespace SourceTrail.SqlServer.Metadata;
 public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
 {
     private readonly DatabaseOptions options;
-    private readonly SqlProcedureAnalyzer live;
     private readonly SqlFolderIndex folder;
     private readonly SemaphoreSlim gate = new(1, 1);
     private string mode;
     public DatabaseAnalyzer(DatabaseOptions options, Action<string>? log = null)
     {
         this.options = options; mode = ValidateMode(options.Mode);
-        live = new(options, log); folder = new(options);
+        folder = new(options);
     }
     private static string ValidateMode(string mode) => mode switch
     {
         "SqlFiles" => mode,
-        "LiveDatabase" => mode,
-        _ => throw new ArgumentException("mode must be SqlFiles or LiveDatabase.")
+        _ => throw new ArgumentException("Only SqlFiles is supported. Provide a local SQL folder; live DB access has been removed.")
     };
-    public SqlSourceState Status() => mode == "SqlFiles" ? folder.Status : new("LiveDatabase",
-        string.IsNullOrWhiteSpace(options.ConnectionString) ? "NotConfigured" : "Configured",
-        null, null, null, 0, 0, 0, 0, ["Configured does not prove connectivity or metadata visibility. Live definitions are queried on each request."]);
+    public SqlSourceState Status() => folder.Status;
     public async Task<SqlSourceState> SelectAsync(string selectedMode, string? sqlFolder, CancellationToken token)
     {
         selectedMode = ValidateMode(selectedMode);
@@ -46,7 +42,7 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
         await gate.WaitAsync(token);
         try
         {
-            if (mode == "SqlFiles") await folder.LoadAsync(folder.Status.Folder ?? options.SqlFolder, token);
+            if (mode == "SqlFiles") await folder.LoadAsync(folder.Status.Folder ?? options.SqlFolder, token, verifyContent: true);
             return Status();
         }
         finally { gate.Release(); }
@@ -57,7 +53,6 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
         await gate.WaitAsync(token);
         try
         {
-            if (mode != "SqlFiles") throw new InvalidOperationException("find_sql_object uses SqlFiles mode; use analyze_procedure for LiveDatabase.");
             await folder.EnsureAsync(token);
             var matches = folder.Objects.Where(o => SqlFolderIndex.Key(o).Contains(query, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(SqlFolderIndex.Key).ToArray();
@@ -80,8 +75,6 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
         await gate.WaitAsync(token);
         try
         {
-            if (mode == "LiveDatabase")
-                return (await live.AnalyzeAsync(procedure, includeDefinition, token)) with { Source = mode, AnalyzedAt = DateTimeOffset.UtcNow };
             return await AnalyzeFilesAsync(procedure, includeDefinition, token);
         }
         finally { gate.Release(); }

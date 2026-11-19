@@ -4,7 +4,7 @@ using System.Text;
 using SourceTrail.Core.Models;
 namespace SourceTrail.Core.Contracts;
 
-// 입력 변경 시 분석 상태를 다시 구성한다. Roslyn 객체 자체는 디스크에 저장하지 않는다.
+// Track source search inputs only; assemblies and build infrastructure are not analysis dependencies.
 public interface IRefreshableCodeAnalyzer
 {
     Task EnsureFreshAsync(CancellationToken cancellationToken);
@@ -15,18 +15,25 @@ public sealed class SolutionInputTracker
     public sealed record FileStamp(string Path, long Size, DateTime LastWriteUtc, DateTime CreationUtc, string Hash);
 
     public static async Task<FileStamp[]> CaptureAsync(SolutionState state, IEnumerable<string> extraInputs,
-        FileStamp[] previous, CancellationToken token)
+        FileStamp[] previous, CancellationToken token, bool forceHash = false, bool hashContent = true)
     {
         using var measurement = AnalysisTelemetry.Measure("code.input.stamps");
         var known = previous.ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
-        var paths = CollectInputPaths(state, extraInputs);
+        HashSet<string> paths;
+        using (AnalysisTelemetry.Measure("code.input.enumerate")) paths = CollectInputPaths(state, extraInputs);
         var files = new List<FileStamp>(paths.Count);
         foreach (var path in paths.Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
             var info = new FileInfo(path);
             if (!info.Exists) continue;
-            if (known.TryGetValue(path, out var existing) && existing.Size == info.Length &&
+            if (!hashContent)
+            {
+                files.Add(new(path, info.Length, info.LastWriteTimeUtc, info.CreationTimeUtc,
+                    $"META:{info.Length}:{info.LastWriteTimeUtc.Ticks}:{info.CreationTimeUtc.Ticks}"));
+                continue;
+            }
+            if (!forceHash && known.TryGetValue(path, out var existing) && existing.Size == info.Length &&
                 existing.LastWriteUtc == info.LastWriteTimeUtc && existing.CreationUtc == info.CreationTimeUtc)
             {
                 files.Add(existing);
@@ -70,13 +77,12 @@ public sealed class SolutionInputTracker
         var paths = new HashSet<string>(extraInputs, StringComparer.OrdinalIgnoreCase) { state.SolutionPath! };
         var roots = paths.Where(p => Path.GetExtension(p).Equals(".cs", StringComparison.OrdinalIgnoreCase)).Select(p => Path.GetDirectoryName(p)!)
             .Concat(state.Projects.Where(p => p.File is not null).Select(p => Path.GetDirectoryName(p.File!)!))
-            .Append(Path.GetDirectoryName(state.SolutionPath)!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            .Append(Directory.Exists(state.SolutionPath) ? state.SolutionPath! : Path.GetDirectoryName(state.SolutionPath)!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (var project in state.Projects) if (project.File is not null) paths.Add(project.File);
         var scanRoots = roots.Where(root => !roots.Any(other => !other.Equals(root, StringComparison.OrdinalIgnoreCase) && root.StartsWith(Path.TrimEndingDirectorySeparator(other) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))).ToArray();
         foreach (var root in scanRoots)
         {
             AddDirectoryInputs(root, paths);
-            AddAncestorSettings(root, paths);
         }
         return paths;
     }
@@ -115,18 +121,13 @@ public sealed class SolutionInputTracker
             {
                 var attr = entry.Attributes;
                 if (attr.HasFlag(FileAttributes.ReparsePoint)) continue;
+                if (entry.Name.Equals("NuGet.Config", StringComparison.OrdinalIgnoreCase)) continue;
                 if (attr.HasFlag(FileAttributes.Directory))
                 { if (entry.Name is not "bin" and not "obj" and not ".git" and not ".svn" and not ".vs" and not "node_modules") pending.Push(entry.FullName); }
-                else if (entry.Extension.ToLowerInvariant() is ".cs" or ".csproj" or ".props" or ".targets" or ".sln" or ".svc" or ".config" or ".json" or ".dll") paths.Add(entry.FullName);
+                else if (entry.Extension.ToLowerInvariant() is ".cs" or ".csproj" or ".sln" or ".svc" or ".config" or ".resx") paths.Add(entry.FullName);
             }
         }
     }
 
-    private static void AddAncestorSettings(string root, HashSet<string> paths)
-    {
-        for (var parent = Directory.GetParent(root); parent is not null; parent = parent.Parent)
-            foreach (var name in new[] { "global.json", "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "NuGet.Config" })
-                paths.Add(Path.Combine(parent.FullName, name));
-    }
 
 }

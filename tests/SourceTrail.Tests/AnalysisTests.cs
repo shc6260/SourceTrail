@@ -1,308 +1,128 @@
 using SourceTrail.Core.Contracts;
-using SourceTrail.Core.Flow;
 using SourceTrail.Core.Models;
 using SourceTrail.Roslyn.Workspace;
-using SourceTrail.SqlServer.Metadata;
 using Xunit;
-
 namespace SourceTrail.Tests;
-
 [CollectionDefinition("Solution", DisableParallelization = true)]
 public sealed class SolutionCollection : ICollectionFixture<LoadedSolution> { }
-
 public sealed class LoadedSolution : IAsyncLifetime
 {
-    public RoslynAnalyzer Code { get; } = new(new AnalysisOptions
-    {
-        ProcedureCallRules = [new("Demo.Data.Db", "ExecuteProcedure", 0)]
-    });
+    public RoslynAnalyzer Code { get; } = new(new AnalysisOptions { ProcedureCallRules = [new("Demo.Data.Db", "ExecuteProcedure", 0)] });
     public string FixturePath { get; } = FindFixture();
-    public async Task InitializeAsync() => await Code.LoadAsync(FixturePath, CancellationToken.None);
+    public async Task InitializeAsync() => await Code.LoadAsync(FixturePath, default);
     public Task DisposeAsync() { Code.Dispose(); return Task.CompletedTask; }
     private static string FindFixture()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "SourceTrail.sln")))
-            directory = directory.Parent;
-        return Path.Combine(directory?.FullName ?? throw new InvalidOperationException("Repository root not found."),
-            "tests", "Fixtures", "Demo", "Demo.sln");
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "SourceTrail.sln"))) directory = directory.Parent;
+        return Path.Combine(directory?.FullName ?? throw new InvalidOperationException(), "tests", "Fixtures", "Demo", "Demo.sln");
     }
 }
-
 [Collection("Solution")]
 public sealed class AnalysisTests(LoadedSolution fixture)
 {
-    private readonly RoslynAnalyzer _code = fixture.Code;
-    private static readonly CancellationToken Token = CancellationToken.None;
-    private async Task<SymbolInfo> Find(string fullName)
-    {
-        var result = await _code.FindSymbolsAsync(fullName, 0, 100, Token);
-        return Assert.Single(result.Items, s => s.FullName == fullName);
-    }
-
+    private RoslynAnalyzer Code => fixture.Code;
     [Fact]
-    public async Task UiActionSearchJoinsMenuCaptionAndSaveAliasWithoutLoadingRoslynWorkspace()
+    public void SourceIndexNeverClaimsCompilationWasChecked()
     {
-        using var analyzer = new RoslynAnalyzer(new AnalysisOptions { SolutionPath = fixture.FixturePath });
-        var save = await analyzer.FindUiActionsAsync("재고 저장 찾아줘", 5, Token);
-        var edit = await analyzer.FindUiActionsAsync("재고 수정", 5, Token);
-        var candidate = Assert.Single(save.Items);
-        Assert.Equal("Demo.UI.DesignerTestForm", candidate.Screen);
-        Assert.Equal("SaveClicked", candidate.Handler);
-        Assert.Equal("수정(F12)", candidate.Caption);
-        Assert.Equal(2, edit.Total);
-        Assert.Equal(candidate.Handler, edit.Items[0].Handler);
-        Assert.Contains(edit.Items[0].Evidence,
-            evidence => evidence.Kind == "HandlerCall" && evidence.Text == "SaveData");
-        Assert.Contains(candidate.Evidence, evidence => evidence.Kind == "MenuCaption" && evidence.Text == "재고");
-        Assert.Contains(candidate.Evidence, evidence => evidence.Kind == "ScreenCreation");
-        Assert.Contains(candidate.Evidence, evidence => evidence.Kind == "HandlerCall" && evidence.Text == "SaveData");
-        Assert.All(candidate.Evidence, evidence => Assert.True(evidence.Line > 0));
-        Assert.Equal("Built", save.IndexState);
-        Assert.Equal("Memory", edit.IndexState);
-        Assert.Equal("NotLoaded", analyzer.Status().Status);
-        Assert.Empty((await analyzer.FindUiActionsAsync("없는화면 저장", 5, Token)).Items);
+        Assert.Equal("Ready", Code.Status().Status);
+        Assert.Equal(2, Code.Status().Projects.Count);
+        Assert.All(Code.Status().Projects, project => Assert.Null(project.CompilationErrors));
+        Assert.DoesNotContain(AppDomain.CurrentDomain.GetAssemblies(), assembly => assembly.GetName().Name == "Microsoft.CodeAnalysis.Workspaces.MSBuild");
     }
-
     [Fact]
-    public async Task DatabaseCallsReturnExecutionSitesAndLeaveDynamicTargetsUnresolved()
+    public async Task UiCandidatesWorkWithoutAnyDeclarationIndexOrCompiler()
     {
-        var result = await _code.FindDatabaseCallsAsync("Demo.Data.DatabaseCalls.Save", 3, 32, Token);
-        Assert.Contains(result.Calls, call => call.Kind == "SqlText" &&
-            call.Targets.SequenceEqual(["dbo.InfoPatient"]) && call.Execution == "ExecuteReader" &&
-            Assert.Single(call.Path).Method.Contains("DatabaseCalls.Save"));
-        Assert.Contains(result.Calls, call => call.Kind == "TableAdapterProcedure" &&
-            call.Targets.SequenceEqual(["dbo.usp_SaveFixture"]) && call.Condition!.Contains("Modified rows"));
-        Assert.Contains(result.Calls, call => call.Kind == "DirectProcedure" &&
-            call.Targets.SequenceEqual(["dbo.usp_ClearFixture"]) && call.Execution == "ExecuteNonQuery");
-        Assert.DoesNotContain(result.Calls, call => call.Targets.Contains("dbo.usp_UnusedFixture"));
-        Assert.Single(result.Unresolved);
-        Assert.Equal("Partial", result.Status);
-        var bounded = await _code.FindDatabaseCallsAsync("Demo.Data.DatabaseCalls.Save", 0, 32, Token);
-        Assert.True(bounded.Truncated);
-        Assert.DoesNotContain(bounded.Calls, call => call.Kind == "SqlText");
+        using var code = new RoslynAnalyzer(new AnalysisOptions { SolutionPath = fixture.FixturePath });
+        var spaced = await code.FindUiActionsAsync("재고 저장 찾아줘", 5, default);
+        var joined = await code.FindUiActionsAsync("재고저장", 5, default);
+        var english = await code.FindUiActionsAsync("재고 save", 5, default);
+        var edit = await code.FindUiActionsAsync("재고 수정", 5, default);
+        Assert.Equal("SaveClicked", Assert.Single(spaced.Items).Handler);
+        Assert.Equal(spaced.Items.Select(item => item.Handler), joined.Items.Select(item => item.Handler));
+        Assert.Equal(spaced.Items.Select(item => item.Handler), english.Items.Select(item => item.Handler));
+        Assert.Equal("SaveClicked", edit.Items[0].Handler);
+        Assert.Equal("NotLoaded", code.Status().Status);
+        Assert.Contains(spaced.Items[0].Evidence, evidence => evidence.Kind == "MenuCaption");
+        Assert.Contains(spaced.Items[0].Evidence, evidence => evidence.Kind == "HandlerCall" && evidence.Text == "SaveData");
+        Assert.Empty((await code.FindUiActionsAsync("재고저장소", 5, default)).Items);
     }
-
     [Fact]
-    public async Task ScopedTextSearchLimitsTheScanToSolutionFolderAndExtension()
+    public async Task DeclarationsArePagedAndAmbiguousNamesRequireSourceIds()
     {
-        var matches = await _code.SearchTextAsync("namespace Demo", 0, 100, Token, "Demo.UI", ".cs");
-        Assert.NotEmpty(matches.Items);
-        Assert.All(matches.Items, match =>
-        {
-            Assert.Equal("Demo.UI", Path.GetFileName(Path.GetDirectoryName(match.File)));
-            Assert.EndsWith(".cs", match.File);
-        });
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            _code.SearchTextAsync("namespace Demo", 0, 100, Token, "..", ".cs"));
+        var first = await Code.FindSymbolsAsync("Demo.Data.Repository.Save(", 0, 1, default);
+        var second = await Code.FindSymbolsAsync("Demo.Data.Repository.Save(", 1, 1, default);
+        Assert.Equal(2, first.Total); Assert.True(first.Truncated);
+        Assert.NotEqual(first.Items[0].Id, second.Items[0].Id);
+        await Assert.ThrowsAsync<ArgumentException>(() => Code.ReferencesAsync("Demo.Data.Repository.Save", 0, 10, default));
+        var references = await Code.ReferencesAsync(first.Items[0].Id, 0, 100, default);
+        Assert.NotEmpty(references.Items);
+        Assert.All(references.Items, item => Assert.Equal("NameReferenceCandidate", item.RelationType));
+        Assert.Contains(references.Warnings, warning => warning.Contains("not resolved"));
     }
-
     [Fact]
-    public async Task WcfActionAndHostedAdapterReturnStaticCandidateWithRowStateEvidence()
+    public async Task OverviewAndDesignerBindingsHaveSourceLocations()
     {
-        var entry = await Find("Demo.Data.SaveClientEntry.Save(System.Data.DataTable)");
-        var flow = new FlowAnalyzer(_code, new FakeDatabase());
-        var path = await flow.TraceProcedurePathAsync(entry.Id, "dbo.usp_SaveFixture", 3, 3, Token);
-        if (path.PathStatus != "Candidate")
-        {
-            var graph = await flow.TraceCodeAsync(entry.Id, 12, 120, Token);
-            var names = graph.Nodes.ToDictionary(node => node.Id, node => node.Name);
-            Assert.Fail(string.Join(Environment.NewLine, graph.Edges.Select(edge =>
-                $"{names[edge.From]} -> {names[edge.To]} ({edge.RelationType})").Concat(graph.Warnings)));
-        }
-        Assert.Contains(path.Steps, step => step.RelationType == "DispatchCandidate" &&
-            step.File?.EndsWith("SaveService.svc") == true);
-        Assert.Contains(path.Steps, step => step.RelationType == "TableAdapterCommand" &&
-            step.Evidence.Contains("Modified rows"));
-        Assert.Equal(3, path.Steps.Count);
-        Assert.True(path.SearchTruncated);
-        Assert.DoesNotContain(path.Steps, step => step.Target.Contains("Demo.Data.SaveClient."));
-        var textCommand = await flow.TraceProcedurePathAsync(entry.Id, "dbo.usp_InsertFixture", 12, 120, Token);
-        Assert.Equal("NotConnected", textCommand.PathStatus);
+        var file = Path.Combine(Path.GetDirectoryName(fixture.FixturePath)!, "Demo.UI", "DesignerTestForm.cs");
+        var overview = await Code.OverviewAsync(file, default);
+        Assert.Contains(overview.Methods, method => method.Name == "SaveData");
+        var handler = Assert.Single((await Code.FindEventHandlersAsync(file, "save", 0, 10, default)).Items);
+        Assert.Equal("SaveClicked", handler.Handler); Assert.Equal("Click", handler.Event);
+        Assert.True(handler.HandlerLine > 0); Assert.NotNull(handler.SymbolId);
+        Assert.EndsWith(".Designer.cs", handler.BindingFile);
     }
-
     [Fact]
-    public void LoadsAllProjectsAndReportsSnapshot()
+    public async Task TextSearchPreservesPagingAndSupportsCompoundSuffixes()
     {
-        var status = _code.Status();
-        Assert.Equal("Ready", status.Status);
-        Assert.Equal(2, status.Projects.Count);
-        Assert.NotNull(status.SnapshotId);
-        Assert.All(status.Projects, p => Assert.Equal(0, p.CompilationErrors));
+        var messages = new List<string>();
+        using var code = new RoslynAnalyzer(new AnalysisOptions { SolutionPath = fixture.FixturePath }, messages.Add);
+        var result = await code.SearchTextAsync("SaveClicked", 0, 1, default, "Demo.UI", ".Designer.cs");
+        Assert.NotEmpty(result.Items); Assert.All(result.Items, item => Assert.EndsWith(".Designer.cs", item.File));
+        Assert.Contains(messages, message => message.StartsWith("Text search timing:"));
+        Assert.DoesNotContain(messages, message => message.Contains("SaveClicked"));
+        foreach (var suffix in new[] { "*.cs", ".exe", "../.cs", ".foo/Bar.cs" })
+            await Assert.ThrowsAsync<ArgumentException>(() => code.SearchTextAsync("Save", 0, 10, default, null, suffix));
+        await Assert.ThrowsAsync<ArgumentException>(() => code.SearchTextAsync("Save", 0, 10, default, "..", ".cs"));
     }
-
     [Fact]
-    public async Task SymbolSearchReturnsUniqueOverloadIdsAndPaging()
+    public async Task ProcedureLiteralsAreCandidatesAndCommentsAreExcluded()
     {
-        var result = await _code.FindSymbolsAsync("Demo.Data.Repository.Save(", 0, 1, Token);
-        Assert.Equal(2, result.Total);
-        Assert.True(result.Truncated);
-        var next = await _code.FindSymbolsAsync("Demo.Data.Repository.Save(", 1, 1, Token);
-        Assert.NotEqual(result.Items[0].Id, next.Items[0].Id);
-        Assert.NotNull(result.Items[0].File);
-        Assert.True(result.Items[0].Line > 0);
+        var usage = await Code.ProcedureUsagesAsync("dbo.usp_TestSave", 0, 100, default);
+        Assert.NotEmpty(usage.Items); Assert.All(usage.Items, item => Assert.False(item.IsVerifiedCall));
+        Assert.Empty((await Code.ProcedureUsagesAsync("dbo.usp_CommentOnly", 0, 100, default)).Items);
     }
-
     [Fact]
-    public async Task AmbiguousNameRequiresAnExactId()
+    public async Task DbSearchReportsCurrentMethodConfigurationsAndNextKeywordsOnly()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => _code.ReferencesAsync("Save", 0, 100, Token));
+        var result = await Code.FindDatabaseCallsAsync("Demo.Data.CollectionCalls.Save", 50, default);
+        Assert.Equal("Candidates", result.Status);
+        Assert.Contains(result.Calls, call => call.Targets.Contains("dbo.usp_CollectionInsert"));
+        Assert.Contains(result.Calls, call => call.Targets.Contains("dbo.usp_CollectionUpdate"));
+        // Unused configurations are intentionally candidates, never upgraded to execution proof.
+        Assert.Contains(result.Calls, call => call.Targets.Contains("dbo.usp_UnusedCollection") && call.Execution == "CommandConfiguration");
+        Assert.All(result.Calls, call => Assert.Contains("check", call.Condition!, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.MethodCandidates, method => method.Name == "ExecuteBatch");
+        Assert.DoesNotContain(result.MethodCandidates, method => method.Name == "ExecuteNonQuery");
+        var dynamic = await Code.FindDatabaseCallsAsync("Demo.Data.CollectionCalls.Dynamic", 20, default);
+        Assert.Empty(dynamic.Calls); Assert.NotEmpty(dynamic.Unresolved);
+        var cycles = await Code.FindDatabaseCallsAsync("Demo.Data.Repository.CycleA", 20, default);
+        Assert.Equal("CycleB", Assert.Single(cycles.MethodCandidates).Name);
+        var limited = await Code.FindDatabaseCallsAsync("Demo.Data.CollectionCalls.Save", 1, default);
+        Assert.True(limited.Truncated); Assert.Single(limited.Calls);
     }
-
     [Fact]
-    public async Task OverviewSeparatesMembersAndMarksWinFormsType()
+    public async Task AdapterConfigurationsAreCandidatesWithRowStateEvidence()
     {
-        var type = await Find("Demo.UI.TestForm");
-        var result = await _code.OverviewAsync(type.Id, Token);
-        Assert.Contains(result.Types, s => s.IsUi);
-        Assert.Single(result.Constructors);
-        Assert.Contains(result.Fields, s => s.Name == "_button");
-        Assert.Contains(result.Properties, s => s.Name == "Caption");
-        Assert.Contains(result.Methods, s => s.Name == "SaveClicked");
+        var result = await Code.FindDatabaseCallsAsync("Demo.Data.DatabaseCalls.Save", 50, default);
+        Assert.Contains(result.Calls, call => call.Kind == "AdapterCommandCandidate" && call.Targets.Contains("dbo.usp_SaveFixture") && call.Condition!.Contains("Modified"));
+        Assert.Contains(result.Calls, call => call.Targets.Contains("dbo.usp_ClearFixture"));
+        Assert.NotEmpty(result.Unresolved);
     }
-
     [Fact]
-    public async Task ReferencesIncludeActualCallersAndMethodGroupReferences()
+    public async Task InvalidSourceRootDoesNotReplacePublishedIndex()
     {
-        var symbol = await Find("Demo.Data.Repository.Save()");
-        var result = await _code.ReferencesAsync(symbol.Id, 0, 100, Token);
-        Assert.Contains(result.Items, r => r.ReferencingSymbol?.FullName == "Demo.UI.Service.Save()");
-        Assert.Contains(result.Items, r => r.ReferencingSymbol?.FullName == "Demo.Data.Repository.DelegateOnly()");
-    }
-
-    [Fact]
-    public async Task IncomingGraphDoesNotTreatDelegateAssignmentAsInvocation()
-    {
-        var symbol = await Find("Demo.Data.Repository.Save()");
-        var result = await _code.ExpandAsync(symbol.Id, true, Token);
-        Assert.DoesNotContain(result.Relations, r => r.From.FullName == "Demo.Data.Repository.DelegateOnly()");
-        Assert.Contains(result.Relations, r => r.From.FullName == "Demo.UI.Service.Save()");
-    }
-
-    [Fact]
-    public async Task ProcedureUsageResolvesConstantAndContainingSymbol()
-    {
-        var result = await _code.ProcedureUsagesAsync("dbo.usp_TestSave", 0, 100, Token);
-        var usage = Assert.Single(result.Items, u => u.IsVerifiedCall);
-        Assert.Equal("Demo.Data.Repository.Save()", usage.ContainingSymbol?.FullName);
-        Assert.Equal("ConfiguredProcedureCall", usage.RelationType);
-    }
-
-    [Fact]
-    public async Task CommentsAreTextMatchesButNotProcedureUsage()
-    {
-        var usages = await _code.ProcedureUsagesAsync("dbo.usp_CommentOnly", 0, 100, Token);
-        Assert.Empty(usages.Items);
-        var text = await _code.SearchTextAsync("dbo.usp_CommentOnly", 0, 100, Token);
-        Assert.NotEmpty(text.Items);
-        Assert.DoesNotContain(text.Items, t => t.File.Contains("\\obj\\") || t.File.Contains("\\bin\\"));
-    }
-
-    [Fact]
-    public async Task UnregisteredStringIsOnlyACandidate()
-    {
-        var usages = await _code.ProcedureUsagesAsync("dbo.usp_NotCalled", 0, 100, Token);
-        Assert.NotEmpty(usages.Items);
-        Assert.All(usages.Items, u => Assert.False(u.IsVerifiedCall));
-        var flow = await new FlowAnalyzer(_code, new FakeDatabase()).TraceProcedureAsync("dbo.usp_NotCalled", 5, 200, Token);
-        Assert.Single(flow.Nodes);
-        Assert.Equal("Partial", flow.Status);
-    }
-
-    [Fact]
-    public async Task ForwardTraceIncludesFormServiceRepositoryProcedureAndMockTable()
-    {
-        var symbol = await Find("Demo.UI.TestForm.SaveClicked(object?, System.EventArgs)");
-        var result = await new FlowAnalyzer(_code, new FakeDatabase()).TraceCodeAsync(symbol.Id, 8, 200, Token);
-        Assert.Contains(result.Nodes, n => n.Kind == "Procedure" && n.Name == "dbo.usp_TestSave");
-        Assert.Contains(result.Nodes, n => n.Name == "DemoTable");
-        Assert.Contains(result.Nodes, n => n.Name == "Demo.Data.Repository.Save()");
-        Assert.Contains(result.Edges, e => e.RelationType == "DispatchCandidate");
-        Assert.Equal("Partial", result.Status); // Interface dispatch is explicitly a candidate.
-        Assert.False(result.Truncated);
-    }
-
-    [Fact]
-    public async Task ForwardTraceKeepsSqlIndexSummary()
-    {
-        var symbol = await Find("Demo.Data.Repository.Save()");
-        var flow = new FlowAnalyzer(_code, new FakeDatabase(indexWarningCount: 504));
-        var graph = await flow.TraceCodeAsync(symbol.Id, 8, 200, Token);
-        Assert.Equal("Partial", graph.Status);
-        Assert.Single(graph.Warnings, w => w.Contains("504 diagnostics"));
-        Assert.Contains(graph.Nodes, n => n.Name == "DemoTable");
-
-        var path = await flow.TraceProcedurePathAsync(symbol.Id, "dbo.usp_TestSave", 8, 200, Token);
-        Assert.Equal(1, path.SqlWarningCount);
-        Assert.Equal(504, path.SqlIndexWarningCount);
-    }
-
-    [Fact]
-    public async Task ReverseTraceIncludesUiAndEventSubscription()
-    {
-        var result = await new FlowAnalyzer(_code, new FakeDatabase()).TraceProcedureAsync("dbo.usp_TestSave", 8, 200, Token);
-        Assert.Contains(result.Nodes, n => n.Kind.StartsWith("Ui"));
-        Assert.Contains(result.Edges, e => e.RelationType == "EventSubscription");
-    }
-
-    [Fact]
-    public async Task CyclesTerminateAndLimitsAreReported()
-    {
-        var symbol = await Find("Demo.Data.Repository.CycleA()");
-        var flow = new FlowAnalyzer(_code, new FakeDatabase());
-        var result = await flow.TraceCodeAsync(symbol.Id, 5, 200, Token);
-        Assert.Equal(2, result.Nodes.Count);
-        Assert.Equal(2, result.Edges.Count);
-        Assert.False(result.Truncated);
-        var limited = await flow.TraceCodeAsync(symbol.Id, 0, 200, Token);
-        Assert.Single(limited.Nodes);
-        Assert.True(limited.Truncated);
-        var nodesLimited = await flow.TraceCodeAsync(symbol.Id, 5, 1, Token);
-        Assert.Single(nodesLimited.Nodes);
-        Assert.True(nodesLimited.Truncated);
-        Assert.All(nodesLimited.Edges, e => Assert.Contains(nodesLimited.Nodes, n => n.Id == e.To));
-    }
-
-    [Fact]
-    public async Task DbOptionalAndSourceTraceStillWorks()
-    {
-        var sql = new SqlProcedureAnalyzer();
-        var metadata = await sql.AnalyzeAsync("dbo.usp_TestSave", false, Token);
-        Assert.Equal("NotConfigured", metadata.Status);
-        var symbol = await Find("Demo.Data.Repository.Save()");
-        var flow = await new FlowAnalyzer(_code, sql).TraceCodeAsync(symbol.Id, 5, 200, Token);
-        Assert.Contains(flow.Nodes, n => n.Kind == "Procedure");
-        Assert.Equal("Partial", flow.Status);
-    }
-
-    [Fact]
-    public async Task MissingSolutionPreservesExistingSnapshot()
-    {
-        string? snapshot = _code.Status().SnapshotId;
-        await Assert.ThrowsAsync<ArgumentException>(() => _code.LoadAsync(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".sln"), Token));
-        Assert.Equal(snapshot, _code.Status().SnapshotId);
-    }
-
-    [Fact]
-    public async Task ReloadInvalidatesSymbolIdsAndCaches()
-    {
-        var oldSymbol = await Find("Demo.Data.Repository.Save()");
-        var snapshot = _code.Status().SnapshotId;
-        await _code.ReloadAsync(Token);
-        Assert.NotEqual(snapshot, _code.Status().SnapshotId);
-        await Assert.ThrowsAsync<ArgumentException>(() => _code.ReferencesAsync(oldSymbol.Id, 0, 100, Token));
-        var fresh = await Find("Demo.Data.Repository.Save()");
-        Assert.NotEqual(oldSymbol.Id, fresh.Id);
-    }
-
-    private sealed class FakeDatabase(int? indexWarningCount = null) : IProcedureAnalyzer
-    {
-        public Task<ProcedureAnalysis> AnalyzeAsync(string procedure, bool includeDefinition, CancellationToken cancellationToken) =>
-            Task.FromResult(new ProcedureAnalysis(indexWarningCount is null ? "Ready" : "Partial", procedure, "dbo", "Fixture", null,
-                [new SqlObject(null, "Fixture", "dbo", "DemoTable", "USER_TABLE", "Unknown", true, false, false)],
-                ["SQL dependencies in this test are mocked, not live database validation."])
-            {
-                IndexStatus = indexWarningCount is null ? null : "Partial", IndexWarningCount = indexWarningCount
-            });
+        var snapshot = Code.Status().SnapshotId;
+        await Assert.ThrowsAsync<ArgumentException>(() => Code.LoadAsync(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".sln"), default));
+        Assert.Equal(snapshot, Code.Status().SnapshotId);
     }
 }

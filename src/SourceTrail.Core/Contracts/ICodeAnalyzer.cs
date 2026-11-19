@@ -15,7 +15,6 @@ public interface ICodeAnalyzer : IDisposable
     Task<Page<EventHandlerMatch>> FindEventHandlersAsync(string file, string? query, int offset, int limit,
         CancellationToken cancellationToken);
     Task<Page<ProcedureUsage>> ProcedureUsagesAsync(string procedure, int offset, int limit, CancellationToken cancellationToken);
-    Task<CodeExpansion> ExpandAsync(string symbol, bool callers, CancellationToken cancellationToken);
 }
 
 public interface IProcedureAnalyzer
@@ -25,8 +24,7 @@ public interface IProcedureAnalyzer
 
 public interface IDatabaseCallAnalyzer
 {
-    Task<DatabaseCallSummary> FindDatabaseCallsAsync(string symbol, int maxDepth, int maxMethods,
-        CancellationToken cancellationToken);
+    Task<DatabaseCallSummary> FindDatabaseCallsAsync(string symbol, int limit, CancellationToken cancellationToken);
 }
 
 public interface IUiActionAnalyzer

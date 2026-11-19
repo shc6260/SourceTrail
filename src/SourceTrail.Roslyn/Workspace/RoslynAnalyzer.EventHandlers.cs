@@ -41,13 +41,7 @@ public sealed partial class RoslynAnalyzer
             }
             var methods = declarations.ToLookup(method =>
                 (method.FirstAncestorOrSelf<TypeDeclarationSyntax>()?.Identifier.ValueText, method.Identifier.ValueText));
-            if (_diskIndex is not null && _indexedSymbols is null)
-                _indexedSymbols = await ReadDiskItemAsync<SymbolInfo[]>("symbols", cancellationToken);
-            var handlerNames = bindings.Select(binding => binding.Handler).ToHashSet(StringComparer.Ordinal);
-            var availableSymbols = _indexedSymbols ?? (_symbolsReady
-                ? _symbols.Values.Where(item => item.Symbol is IMethodSymbol && handlerNames.Contains(item.Symbol.Name))
-                    .Select(item => Describe(item.Symbol, item.Project)).ToArray()
-                : []);
+            var availableSymbols = _indexedSymbols;
             var indexed = availableSymbols.Where(symbol => symbol.SymbolKind == "Method" &&
                     (StringComparer.OrdinalIgnoreCase.Equals(symbol.File, codeFile) ||
                      StringComparer.OrdinalIgnoreCase.Equals(symbol.File, designerFile)))
@@ -114,8 +108,8 @@ public sealed partial class RoslynAnalyzer
         var path = _state.SolutionPath;
         if (path is null && !string.IsNullOrWhiteSpace(_options.SolutionPath))
             path = ValidateSolutionPath(_options.SolutionPath);
-        return path is not null ? Path.GetDirectoryName(path)! :
-            throw new InvalidOperationException("No solution loaded. Call load_solution first.");
+        return path is not null ? Directory.Exists(path) ? path : Path.GetDirectoryName(path)! :
+            throw new InvalidOperationException("No source folder selected. Call load_solution first.");
     }
 
     private static string ResolveSolutionPath(string root, string input)

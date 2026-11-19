@@ -6,16 +6,15 @@ using SourceTrail.Core.Models;
 
 namespace SourceTrail.Roslyn.Workspace;
 
-internal sealed class DiskCodeIndex(string root, string solutionPath, AnalysisOptions options, Action<string>? log)
+internal sealed class DiskCodeIndex(string root, string solutionPath, AnalysisOptions options, Action<string>? log, bool requireWrites = false)
 {
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     private readonly string directory = Path.Combine(root, "code-" + Hash(JsonSerializer.Serialize(new
     {
         Solution = solutionPath,
         options.ProcedureCallRules,
-        Version = typeof(DiskCodeIndex).Assembly.ManifestModule.ModuleVersionId,
-        Runtime = Environment.Version,
-        MsBuild = Environment.GetEnvironmentVariable("MSBUILD_EXE_PATH")
+        // Bump only when stored data/query semantics change, not on unrelated executable rebuilds.
+        Version = "source-syntax-2-lazy"
     })));
 
     internal sealed record Manifest(SolutionState State, string[] ExtraInputs, SolutionInputTracker.FileStamp[] Files);
@@ -30,6 +29,23 @@ internal sealed class DiskCodeIndex(string root, string solutionPath, AnalysisOp
     }
     internal Task SaveItemAsync<T>(string snapshot, string key, T value, CancellationToken token) =>
         WriteAsync(Hash(key), new Entry<T>(snapshot, value), token);
+
+    internal async Task CopyToAsync(DiskCodeIndex target, CancellationToken token)
+    {
+        if (!Directory.Exists(directory)) return;
+        if (File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint))
+            throw new IOException("Cache directory links are not copied during preparation.");
+        Directory.CreateDirectory(target.directory);
+        foreach (var file in Directory.GetFiles(directory, "*.json"))
+        {
+            token.ThrowIfCancellationRequested();
+            if (File.GetAttributes(file).HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException("Cache file links are not copied during preparation.");
+            await using var input = File.OpenRead(file);
+            await using var output = File.Create(Path.Combine(target.directory, Path.GetFileName(file)));
+            await input.CopyToAsync(output, token);
+        }
+    }
 
     private async Task<T?> ReadAsync<T>(string name, CancellationToken token) where T : class
     {
@@ -55,7 +71,7 @@ internal sealed class DiskCodeIndex(string root, string solutionPath, AnalysisOp
                 await JsonSerializer.SerializeAsync(stream, value, cancellationToken: token);
             File.Move(temporary, destination, overwrite: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (!requireWrites && (ex is IOException or UnauthorizedAccessException))
         {
             log?.Invoke($"C# disk index could not be written ({ex.GetType().Name}).");
         }

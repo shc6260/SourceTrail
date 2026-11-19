@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace SourceTrail.Core.Models;
 
 public sealed record AnalysisDiagnostic(string Severity, string Message, string? Project = null);
-public sealed record ProjectState(string Name, string? File, int Documents, int CompilationErrors);
+public sealed record ProjectState(string Name, string? File, int Documents, int? CompilationErrors = null);
 public sealed record SolutionState(string Status, string? SolutionPath, string? SnapshotId,
     DateTimeOffset? LoadedAt, IReadOnlyList<ProjectState> Projects,
     IReadOnlyList<AnalysisDiagnostic> Diagnostics);
@@ -29,26 +29,18 @@ public sealed record UiActionSearchResult(string Status, string IndexState, int 
 public sealed record ProcedureUsage(string Procedure, string File, int Line,
     SymbolInfo? ContainingSymbol, string RelationType, bool IsVerifiedCall, string Evidence);
 public sealed record ProcedureCallRule(string TypeName, string MethodName, int ArgumentIndex);
-public sealed record CodeRelation(SymbolInfo From, SymbolInfo To, string RelationType,
-    string File, int Line, string Evidence);
-public sealed record CodeExpansion(SymbolInfo Symbol, IReadOnlyList<CodeRelation> Relations,
-    IReadOnlyList<ProcedureUsage> ProcedureUsages, IReadOnlyList<string> Warnings);
 public sealed record DatabaseCallSite(string Method, string File, int Line);
+public sealed record MethodCallCandidate(string Name, string Expression, string File, int Line);
 public sealed record DatabaseCall(string Kind, IReadOnlyList<string> Targets, string Execution,
-    DatabaseCallSite Site, IReadOnlyList<DatabaseCallSite> Path, string? Condition = null);
+    DatabaseCallSite Site, string? Condition = null);
 public sealed record DatabaseCallSummary(string Status, string? SnapshotId, DatabaseCallSite Entry,
-    IReadOnlyList<DatabaseCall> Calls, IReadOnlyList<DatabaseCallSite> Unresolved, int MethodsVisited,
-    bool Truncated, int DiagnosticCount);
-public sealed record CompactDatabaseCall(string Kind, IReadOnlyList<string> Targets, string Execution,
-    int[] Site, IReadOnlyList<int[]> Via, string? Condition);
-public sealed record CompactDatabaseCallSummary(string Status, string? SnapshotId, string? SolutionRoot,
-    IReadOnlyList<string> Files, int[] Entry, IReadOnlyList<CompactDatabaseCall> Calls,
-    IReadOnlyList<int[]> Unresolved, int MethodsVisited, bool Truncated, int DiagnosticCount);
+    IReadOnlyList<DatabaseCall> Calls, IReadOnlyList<DatabaseCallSite> Unresolved,
+    IReadOnlyList<MethodCallCandidate> MethodCandidates, bool Truncated);
 public sealed record SqlObject(string? Server, string? Database, string? Schema, string Name,
     string Kind, string Access, bool Resolved, bool CallerDependent, bool Ambiguous, string? File = null, int? Line = null);
 public sealed record ProcedureAnalysis(string Status, string Procedure, string? Schema,
     string? Database, string? Definition, IReadOnlyList<SqlObject> Dependencies,
-    IReadOnlyList<string> Warnings, string Source = "LiveDatabase", string? SourcePath = null, DateTimeOffset? AnalyzedAt = null)
+    IReadOnlyList<string> Warnings, string Source = "SqlFiles", string? SourcePath = null, DateTimeOffset? AnalyzedAt = null)
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SnapshotId { get; init; }
@@ -57,40 +49,21 @@ public sealed record ProcedureAnalysis(string Status, string Procedure, string? 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? IndexWarningCount { get; init; }
 }
-public sealed record FlowNode(string Id, string Name, string Kind, string? Project = null,
-    string? File = null, int? Line = null, string? Schema = null, string? Database = null);
-public sealed record FlowEdge(string From, string To, string RelationType, string Evidence,
-    string? File = null, int? Line = null);
-public sealed record FlowResult(string Status, string Direction, string? SnapshotId,
-    IReadOnlyList<FlowNode> Nodes, IReadOnlyList<FlowEdge> Edges, bool Truncated,
-    IReadOnlyList<string> Warnings);
-
-public sealed record ProcedurePathStep(string Target, string RelationType, string Evidence, string? File, int? Line);
-public sealed record ProcedurePathResult(string PathStatus, string? SnapshotId, FlowNode Entry,
-    string Procedure, IReadOnlyList<ProcedurePathStep> Steps, bool SearchTruncated, string CodeStatus,
-    string SqlStatus, string? SqlFile, IReadOnlyList<SqlObject> DirectDependencies, int DependencyCount,
-    int CodeWarningCount, int SqlWarningCount, string? Gap)
-{
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? SqlIndexWarningCount { get; init; }
-}
-
 public sealed class AnalysisOptions
 {
     public string SolutionPath { get; set; } = "";
     public string CodeCacheDirectory { get; set; } = "";
+    // Opt-in: notifications may arrive after a request; false preserves per-request scans.
+    public bool WatchCodeFiles { get; set; }
+    public int CodeRescanIntervalSeconds { get; set; } = 30;
     public string[] AdditionalSearchRoots { get; set; } = [];
-    public int MaxDepth { get; set; } = 5;
-    public int MaxNodes { get; set; } = 200;
-    public int MaxResults { get; set; } = 100;
+    public int MaxResults { get; set; } = 20;
     public ProcedureCallRule[] ProcedureCallRules { get; set; } = [];
 }
 public sealed class DatabaseOptions
 {
-    public string Mode { get; set; } = "LiveDatabase";
+    public string Mode { get; set; } = "SqlFiles";
     public string SqlFolder { get; set; } = "";
     public string CacheDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SourceTrail", "cache");
     public bool WatchFiles { get; set; } = true;
-    public string ConnectionString { get; set; } = "";
-    public int CommandTimeoutSeconds { get; set; } = 15;
 }

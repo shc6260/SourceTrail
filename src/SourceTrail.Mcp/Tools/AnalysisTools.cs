@@ -4,39 +4,38 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using SourceTrail.Core.Contracts;
 using SourceTrail.Core;
-using SourceTrail.Core.Flow;
 using SourceTrail.Core.Models;
 
 namespace SourceTrail.Mcp.Tools;
 
 [McpServerToolType]
-public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, FlowAnalyzer flow,
+public sealed class AnalysisTools(ICodeAnalyzer code,
     ILogger<AnalysisTools> logger, AnalysisOptions options, SemaphoreSlim executionGate)
 {
-    [McpServerTool(Name = "load_solution", ReadOnly = true, Destructive = false), Description("Loads an existing absolute .sln path. Returns project diagnostics and a snapshot ID; source files are not changed.")]
+    [McpServerTool(Name = "load_solution", ReadOnly = true, Destructive = false), Description("Indexes an existing absolute source folder or .sln directory using files and C# syntax only. No compiler, MSBuild, project evaluation or reference DLL loading. Returns source-index state; CompilationErrors is not evaluated.")]
     public Task<SolutionState> LoadSolution(string solutionPath, CancellationToken cancellationToken) =>
         Run(cancellationToken, "load_solution", () => code.LoadAsync(solutionPath, cancellationToken));
 
-    [McpServerTool(Name = "get_analysis_status", ReadOnly = true, Destructive = false), Description("Returns the active solution snapshot and load diagnostics. A configured default solution loads on the first C# analysis request.")]
+    [McpServerTool(Name = "get_analysis_status", ReadOnly = true, Destructive = false), Description("Returns source-index state and syntax/read diagnostics. Ready means indexing completed, not successful compilation. The configured folder/solution is indexed on first declaration search.")]
     public SolutionState GetAnalysisStatus() => code.Status();
 
-    [McpServerTool(Name = "reload_solution", ReadOnly = true, Destructive = false), Description("Reloads the active solution from disk and invalidates cached symbols and relationships.")]
+    [McpServerTool(Name = "reload_solution", ReadOnly = true, Destructive = false), Description("Reconciles source files with the index. IDs for unchanged declarations remain stable. No compiler or MSBuild.")]
     public Task<SolutionState> ReloadSolution(CancellationToken cancellationToken) =>
         Run(cancellationToken, "reload_solution", () => code.ReloadAsync(cancellationToken));
 
-    [McpServerTool(Name = "find_symbol", ReadOnly = true, Destructive = false), Description("Finds declared C# symbols. Pass the returned exact ID to other tools to disambiguate projects and overloads.")]
+    [McpServerTool(Name = "find_symbol", ReadOnly = true, Destructive = false), Description("Finds C# declaration candidates by syntax-based name/qualified-name substring, parsing files on demand. Qualified names prioritize matching filenames and report a non-exhaustive scope warning; if none match, scans source candidates more broadly. Names/overloads are not semantically bound. Use names verified in source, not a task phrase; start UI discovery with find_ui_actions. Pass the returned exact source ID to subsequent tools.")]
     public Task<Page<SymbolInfo>> FindSymbol(string query, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_symbol", () => code.FindSymbolsAsync(query, offset, limit ?? options.MaxResults, cancellationToken));
 
     [McpServerTool(Name = "get_symbol_overview", ReadOnly = true, Destructive = false), Description("Returns type/member structure without source bodies. symbol accepts an exact type ID or an absolute file path.")]
     public Task<SymbolOverview> GetSymbolOverview(string symbol, CancellationToken cancellationToken) =>
-        Run(cancellationToken, "get_symbol_overview", () => code.OverviewAsync(symbol, cancellationToken));
+        Run(cancellationToken, "get_symbol_overview", () => code.OverviewAsync(symbol, cancellationToken), requiresCode: !Path.IsPathFullyQualified(symbol));
 
-    [McpServerTool(Name = "find_references", ReadOnly = true, Destructive = false), Description("Uses Roslyn to find actual symbol references. A reference alone is not an invocation.")]
+    [McpServerTool(Name = "find_reference_candidates", ReadOnly = true, Destructive = false), Description("Finds same-name identifier uses in source syntax. These are name-reference candidates, NOT bound symbol references or proven invocations. Read source to disambiguate types and overloads.")]
     public Task<Page<ReferenceInfo>> FindReferences(string symbol, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_references", () => code.ReferencesAsync(symbol, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "search_text", ReadOnly = true, Destructive = false), Description("Searches current disk files. Set directory to a solution-relative folder and extension (e.g. .cs) to narrow the scan. With no directory, searches the solution and configured additional roots. Results are text candidates.")]
+    [McpServerTool(Name = "search_text", ReadOnly = true, Destructive = false), Description("Literal case-insensitive substring search in current disk files; does not tokenize task phrases or expand synonyms. For screen/action discovery use find_ui_actions first. Narrow directory to a known solution-relative folder and extension to .cs, .Designer.cs, .config, .xml or .sql. No wildcards. With no directory, scans the solution and additional roots in full even when zero matches. Results are text candidates.")]
     public Task<Page<TextMatch>> SearchText(string text, CancellationToken cancellationToken, int offset = 0, int? limit = null,
         string? directory = null, string? extension = null) =>
         Run(cancellationToken, "search_text",
@@ -46,73 +45,20 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
     public Task<Page<EventHandlerMatch>> FindEventHandlers(string file, CancellationToken cancellationToken,
         string? query = null, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_event_handlers",
-            () => code.FindEventHandlersAsync(file, query, offset, limit ?? Math.Min(options.MaxResults, 20), cancellationToken));
+            () => code.FindEventHandlersAsync(file, query, offset, limit ?? Math.Min(options.MaxResults, 20), cancellationToken), requiresCode: false);
 
-    [McpServerTool(Name = "find_ui_actions", ReadOnly = true, Destructive = false), Description("Finds WinForms screen and event candidates from a task phrase such as '접수 저장', without a source file path. Uses menu/form/control captions, identifiers and Designer bindings; returns evidence locations. Candidate matching is static and uses no C# compilation.")]
+    [McpServerTool(Name = "find_ui_actions", ReadOnly = true, Destructive = false), Description("Start here for WinForms screen/action discovery. Supply a short screen + action phrase such as '접수 저장' (also accepts '접수저장'), not a whole investigation prompt. Matches menu/form/control captions, identifiers, supported action aliases and Designer bindings. Read returned handler source to verify service names/contracts, then use find_symbol and exact IDs for server/DB tracing. Static candidates with evidence; no C# compilation or runtime proof.")]
     public Task<UiActionSearchResult> FindUiActions(string query, CancellationToken cancellationToken, int limit = 5) =>
         Run(cancellationToken, "find_ui_actions",
             () => ((IUiActionAnalyzer)code).FindUiActionsAsync(query, limit, cancellationToken), requiresCode: false);
 
-    [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Maps procedure string/constant candidates to containing Roslyn symbols and distinguishes configured calls from unverified candidates. Comments are not treated as calls.")]
+    [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Finds procedure-name string literals and containing source declarations. All matches are candidates; comments are excluded and execution is not inferred.")]
     public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_procedure_usage", () => code.ProcedureUsagesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Analyzes a procedure from the selected SQL source (SqlFiles or LiveDatabase). Returns provenance and direct dependencies; definition is opt-in. SqlFiles includes relevant warnings and an index summary. Use get_database_status for all index warnings. Does not execute SQL.")]
-    public Task<ProcedureAnalysis> AnalyzeProcedure(string procedure, CancellationToken cancellationToken, bool includeDefinition = false) =>
-        Run(cancellationToken, "analyze_procedure", () => sql.AnalyzeAsync(procedure, includeDefinition, cancellationToken), requiresCode: false);
-
-    [McpServerTool(Name = "find_database_calls", ReadOnly = true, Destructive = false), Description("From one C# method, returns source-proven SQL execution sites and target names. Use a qualified method name or exact symbol ID. Locations are [zero-based index into files, one-based line]; relative paths are under solutionRoot. One static path per discovered method; unresolved sites and traversal limits are reported. Does not access the database.")]
-    public Task<CompactDatabaseCallSummary> FindDatabaseCalls(string symbol, CancellationToken cancellationToken,
-        int maxDepth = 3, int maxMethods = 32) =>
-        Run(cancellationToken, "find_database_calls", async () =>
-        {
-            var result = await ((IDatabaseCallAnalyzer)code)
-                .FindDatabaseCallsAsync(symbol, maxDepth, maxMethods, cancellationToken);
-            var root = Path.GetDirectoryName(code.Status().SolutionPath);
-            var files = new List<string>();
-            var indexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            int[] Location(DatabaseCallSite site)
-            {
-                if (!indexes.TryGetValue(site.File, out int index))
-                {
-                    indexes[site.File] = index = files.Count;
-                    var relative = root is null ? site.File : Path.GetRelativePath(root, site.File);
-                    files.Add(relative.StartsWith("..", StringComparison.Ordinal) ? site.File : relative);
-                }
-                return [index, site.Line];
-            }
-            var entry = Location(result.Entry);
-            var calls = result.Calls.Select(call => new CompactDatabaseCall(call.Kind, call.Targets, call.Execution,
-                Location(call.Site), call.Path.Select(Location).ToArray(), call.Condition)).ToArray();
-            var unresolved = result.Unresolved.Select(Location).ToArray();
-            return new CompactDatabaseCallSummary(result.Status, result.SnapshotId, root, files, entry,
-                calls, unresolved, result.MethodsVisited, result.Truncated, result.DiagnosticCount);
-        });
-
-    [McpServerTool(Name = "trace_code_to_database", ReadOnly = true, Destructive = false), Description("Traces resolved source invocations and recognized procedure usages forward to SQL metadata. Returns a bounded static graph with evidence.")]
-    public Task<FlowResult> TraceCodeToDatabase(string symbol, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
-        Run(cancellationToken, "trace_code_to_database", () => flow.TraceCodeAsync(symbol, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken));
-
-    [McpServerTool(Name = "trace_procedure_to_ui", ReadOnly = true, Destructive = false), Description("Traces recognized procedure usage back to caller symbols and event subscriptions. Does not infer a remote WCF implementation.")]
-    public Task<FlowResult> TraceProcedureToUi(string procedure, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
-        Run(cancellationToken, "trace_procedure_to_ui", () => flow.TraceProcedureAsync(procedure, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken));
-
-    [McpServerTool(Name = "trace_code_to_database_compact", ReadOnly = true, Destructive = false), Description("Same bounded static trace as trace_code_to_database, with lossless dictionary references for edges. SchemaVersion 1. Nodes retain exact symbol IDs; relation, evidence and file indexes are zero-based. No call sites or warnings are removed.")]
-    public Task<CompactFlowResult> TraceCodeToDatabaseCompact(string symbol, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
-        Run(cancellationToken, "trace_code_to_database_compact", async () =>
-            FlowCompactor.Compact(await flow.TraceCodeAsync(symbol, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken)));
-
-    [McpServerTool(Name = "trace_procedure_to_ui_compact", ReadOnly = true, Destructive = false), Description("Same bounded static trace as trace_procedure_to_ui, with lossless dictionary references for edges. SchemaVersion 1. Nodes retain exact symbol IDs; relation, evidence and file indexes are zero-based. Does not infer remote WCF implementations.")]
-    public Task<CompactFlowResult> TraceProcedureToUiCompact(string procedure, CancellationToken cancellationToken, int? maxDepth = null, int? maxNodes = null) =>
-        Run(cancellationToken, "trace_procedure_to_ui_compact", async () =>
-            FlowCompactor.Compact(await flow.TraceProcedureAsync(procedure, maxDepth ?? options.MaxDepth, maxNodes ?? options.MaxNodes, cancellationToken)));
-
-    [McpServerTool(Name = "trace_procedure_path", ReadOnly = true, Destructive = false), Description("Given an exact C# symbol ID and qualified procedure name, returns one static path with call-site evidence. If needed, restarts bounded traversal from discovered WCF host candidates with separate limits and joins on the server symbol. Direct SQL dependencies retain writes, executions and unclassified references; read-only entries are capped at eight. NotConnected keeps SQL evidence separate. Runtime dispatch and execution require verification.")]
-    public Task<ProcedurePathResult> TraceProcedurePath(string symbol, string procedure, CancellationToken cancellationToken,
-        int? maxDepth = null, int? maxNodes = null) =>
-        Run(cancellationToken, "trace_procedure_path", () => flow.TraceProcedurePathAsync(symbol, procedure,
-            maxDepth ?? options.MaxDepth, maxNodes ?? Math.Min(80, options.MaxNodes), cancellationToken));
-
+    [McpServerTool(Name = "find_database_calls", ReadOnly = true, Destructive = false), Description("Returns DB command/configuration candidates and direct method-call keywords from ONE method, using source syntax only. Does not recursively traverse calls, bind receivers/overloads or infer WCF dispatch. Adapter names and row-state configurations are candidates. Read returned source and search the next method explicitly. No DB connection.")]
+    public Task<DatabaseCallSummary> FindDatabaseCalls(string symbol, CancellationToken cancellationToken, int limit = 20) =>
+        Run(cancellationToken, "find_database_calls", () => ((IDatabaseCallAnalyzer)code).FindDatabaseCallsAsync(symbol, limit, cancellationToken));
     private async Task<T> Run<T>(CancellationToken cancellationToken, string tool, Func<Task<T>> operation, bool requiresCode = true)
     {
         var queuedAt = Stopwatch.GetTimestamp();
@@ -136,6 +82,11 @@ public sealed class AnalysisTools(ICodeAnalyzer code, IProcedureAnalyzer sql, Fl
             }
             using var analysis = AnalysisTelemetry.Measure("tool.operation");
             return await operation();
+        }
+        catch (ArgumentException error)
+        {
+            logger.LogWarning("{Tool} rejected invalid input ({ErrorType}).", tool, error.GetType().Name);
+            throw new ModelContextProtocol.McpException(error.Message);
         }
         catch (Exception error)
         {

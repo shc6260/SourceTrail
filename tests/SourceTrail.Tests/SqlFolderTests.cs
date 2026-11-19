@@ -70,12 +70,9 @@ public sealed class SqlFolderTests : IDisposable
         Assert.Equal("NotFoundInProvidedFiles", missing.Status);
         Assert.Equal(db.Status().SnapshotId, missing.SnapshotId);
         Assert.Equal(db.Status().Warnings.Count, missing.IndexWarningCount);
-        await db.SelectAsync("LiveDatabase", null, default);
-        var live = await db.AnalyzeAsync("dbo.A", false, default);
-        Assert.Equal("NotConfigured", live.Status);
-        Assert.Null(live.IndexWarningCount);
+        await Assert.ThrowsAsync<ArgumentException>(() => db.SelectAsync("LiveDatabase", null, default));
         await Assert.ThrowsAsync<ArgumentException>(() => db.SelectAsync("SqlFiles", Path.Combine(root, "absent"), default));
-        Assert.Equal("LiveDatabase", db.Status().Mode);
+        Assert.Equal("SqlFiles", db.Status().Mode);
     }
     [Fact]
     public async Task CorruptCacheRecoversAndUtf16BomWorks()
@@ -137,7 +134,7 @@ public sealed class SqlFolderTests : IDisposable
         Write("two.sql", "CREATE PROCEDURE dbo.P AS SELECT 2;");
         using var db = new DatabaseAnalyzer(Options);
         using var gate = new SemaphoreSlim(1, 1);
-        var tool = new DatabaseTools(db, gate, NullLogger<DatabaseTools>.Instance);
+        var tool = new DatabaseTools(db, NullLogger<DatabaseTools>.Instance);
         const string query = "dbo.P";
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         var detailed = JsonSerializer.SerializeToElement(await tool.FindSqlObject(query, default, limit: 1), options);
@@ -187,7 +184,8 @@ public sealed class SqlFolderTests : IDisposable
         Write("Added.cs", "class Added {}"); Assert.True(await tracker.ChangedAsync(state, [], default));
         Assert.False(await tracker.ChangedAsync(state, [], default));
         File.Delete(Path.Combine(Scripts, "Added.cs")); Assert.True(await tracker.ChangedAsync(state, [], default));
-        Write("Directory.Build.props", "<Project />"); Assert.True(await tracker.ChangedAsync(state, [], default));
+        Write("Directory.Build.props", "<Project />"); Assert.False(await tracker.ChangedAsync(state, [], default));
+        Write("App.config", "<configuration />"); Assert.True(await tracker.ChangedAsync(state, [], default));
     }
     [Fact]
     public async Task RealExportSmokeWhenExplicitlyConfigured()

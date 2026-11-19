@@ -6,10 +6,10 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using SourceTrail.Core.Contracts;
 using SourceTrail.Core;
-using SourceTrail.Core.Flow;
 using SourceTrail.Core.Models;
 using SourceTrail.Roslyn.Workspace;
 using SourceTrail.SqlServer.Metadata;
+using SourceTrail.Mcp.Indexing;
 
 namespace SourceTrail.Mcp;
 
@@ -17,8 +17,20 @@ internal static class Program
 {
     public static async Task Main(string[] args)
     {
-        // Codex reads MCP stderr as UTF-8, including localized MSBuild diagnostics.
+        // Codex reads MCP stderr as UTF-8, including localized file diagnostics.
         Console.OutputEncoding = Encoding.UTF8;
+        if (args.FirstOrDefault() == "prepare-index")
+        {
+            var configuration = CreateBuilder([]).Configuration;
+            using var cancellation = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+            Environment.ExitCode = await IndexPreparationCommand.RunAsync(args[1..],
+                configuration.GetSection("Analysis").Get<AnalysisOptions>() ?? new(),
+                configuration.GetSection("Database").Get<DatabaseOptions>() ?? new(),
+                configuration.GetSection("Indexing").Get<IndexPreparationOptions>() ?? new(),
+                Console.Out, Console.Error, cancellation.Token);
+            return;
+        }
         var builder = CreateBuilder(args);
         RegisterServices(builder);
 
@@ -51,8 +63,12 @@ internal static class Program
     {
         var analysisOptions = builder.Configuration.GetSection("Analysis").Get<AnalysisOptions>() ?? new();
         var databaseOptions = builder.Configuration.GetSection("Database").Get<DatabaseOptions>() ?? new();
+        var indexOptions = builder.Configuration.GetSection("Indexing").Get<IndexPreparationOptions>() ?? new();
+        IndexPreparationService.ApplyActive(analysisOptions, databaseOptions, indexOptions);
         builder.Services.AddSingleton(analysisOptions);
         builder.Services.AddSingleton(databaseOptions);
+        builder.Services.AddSingleton(indexOptions);
+        builder.Services.AddSingleton<IndexPreparationService>();
         builder.Services.AddSingleton<ICodeAnalyzer>(services =>
         {
             var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Roslyn");
@@ -64,7 +80,6 @@ internal static class Program
             return new DatabaseAnalyzer(databaseOptions, message => logger.LogWarning("{Diagnostic}", message));
         });
         builder.Services.AddSingleton<IProcedureAnalyzer>(services => services.GetRequiredService<DatabaseAnalyzer>());
-        builder.Services.AddSingleton<FlowAnalyzer>();
         builder.Services.AddSingleton(new SemaphoreSlim(1, 1));
         builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();
 
