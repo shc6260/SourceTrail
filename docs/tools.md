@@ -1,96 +1,41 @@
-# 도구별 예제
+# 도구 사용
 
-## 조사 순서
+MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순서입니다. 모든 코드 결과는 텍스트·구문 후보이며 실행 관계를 확정하지 않습니다.
 
-1. **화면을 모를 때**는 업무 문장을 `find_ui_actions`에 전달합니다. 상위 후보의 화면·버튼 문구, 이벤트 구독, 핸들러 줄을 확인합니다. 0건이거나 다른 동작이 잡히면 실제 화면 제목이나 메뉴 문구로 다시 찾고, 폼 파일이 확인되면 `find_event_handlers` 또는 Designer 원문에서 이벤트를 확인합니다.
-2. **서비스를 호출하면** 핸들러 본문에서 호출 이름을 읽고, `search_text`의 `directory`와 `extension`으로 서버 소스 범위를 좁힙니다. WCF는 계약, 서버 구현, 필요한 경우 서비스 호스트 설정을 대조합니다. 동명 메서드나 프록시의 `Async` 이름만으로 구현을 확정하지 않습니다.
-3. **DB 실행 위치를 찾을 때**는 확인된 메서드 전체 이름이나 정확한 심볼 ID를 `find_database_calls`에 전달합니다. `FillBy` 조회는 어댑터의 SelectCommand 및 프로시저 매핑을 원문에서 대조합니다. `unresolved`와 `truncated`가 있으면 누락 범위를 표시합니다.
-4. **프로시저 이름이 확인되면** `SqlFiles`에서 `find_sql_object`의 `locationsOnly=true`로 파일·줄을 찾습니다. 이름 부분 일치 검색이므로 반환된 스키마와 이름을 대조합니다. 로컬 SQL 정의의 직접 의존관계는 `analyze_procedure`로 확인합니다.
-5. **영향 범위를 조사할 때**는 `find_references`, `find_procedure_usage`, `trace_procedure_to_ui`를 사용합니다. 정적 호출, 문자열·구현 후보, 확인 필요 경로를 나누어 파일·줄을 표시합니다.
+복사해서 사용하는 조사 프롬프트와 실행 순서는 [메인 README](../README.md)에 있습니다. 이미 원문으로 확인한 연결의 전체 사용처 조회를 추가하지 않으며, 조사 범위·방식을 늘려야 하면 먼저 확인합니다.
 
-복사해서 사용할 요청 예제입니다.
-
-> 접수 저장 로직을 찾아줘. 먼저 화면과 저장 이벤트를 찾고, 확인된 호출명을 기준으로 WCF 서버 구현과 DB 실행 위치를 확인해줘. 프로시저 이름을 찾으면 SQL 정의의 파일·줄도 보여줘. 확인한 연결과 확인이 필요한 구간을 구분해줘.
-
-업무 소스 없이 UI 검색을 확인하려면 `tests/Fixtures/Demo/Demo.sln`의 절대 경로를 시작 설정에 지정하거나 `load_solution`으로 선택한 뒤, `find_ui_actions`에 `{"query":"재고 저장 찾아줘","limit":5}`를 전달합니다. `Demo.UI.DesignerTestForm`의 `SaveClicked`와 `SaveData` 호출 근거를 확인할 수 있습니다. DB 호출 검색을 별도로 확인하려면 같은 솔루션에서 `find_database_calls`에 `{"symbol":"Demo.Data.DatabaseCalls.Save"}`를 전달합니다.
-
-## 선택형 compact 추적
-
-- `trace_code_to_database_compact`: 일반 forward trace와 같은 입력(`symbol`, `maxDepth`, `maxNodes`).
-- `trace_procedure_to_ui_compact`: 일반 reverse trace와 같은 입력(`procedure`, `maxDepth`, `maxNodes`).
-- 기존 추적 도구와 기본 응답은 변경하지 않습니다. compact는 schemaVersion=1인 별도 응답입니다.
-- nodes에는 정확한 심볼 ID가 그대로 있습니다. edges의 from/to는 nodes의 0-based 인덱스이며 relation/evidence/file도 각각 relations/evidence/files 사전의 인덱스입니다. null 파일·줄은 그대로 보존합니다.
-- 모든 호출 위치·관계·경고·snapshot·Partial/Truncated를 보존합니다. 생략·가지치기·검증되지 않은 호출 승격은 하지 않습니다. Core의 FlowCompactor.Expand로 원형을 복원할 수 있습니다.
-- 호출 수를 줄이거나 WCF 구현을 자동 추론하는 기능은 아닙니다. 전체 영향 범위의 완전성을 보장하지 않습니다.
-
-## 성능 계측과 캐시
-
-- analyze_procedure는 C# freshness를 검사하지 않으며 SQL 소스 자체의 freshness·잠금·오류 처리는 유지합니다.
-- 코드 입력 내용 해시는 스트림으로 계산하지만 전체 내용 검증 정책과 fingerprint 바이트 결합 방식은 유지합니다.
-- 심볼 색인은 수집이 완료된 경우에만 공개합니다. 취소/실패한 부분 결과는 재사용하지 않습니다.
-- SourceTrail.Analysis Meter는 단계별 ms, 입력 파일/바이트 수, 캐시 적중을 제공합니다. 호스트는 단계 시간과 입력 통계를 stderr 로그에 기록합니다. 캐시 적중은 exporter용 지표로 유지하고 노드마다 로그를 출력하지 않습니다. 로그에는 소스 본문·연결 정보가 포함되지 않습니다.
-- queue 시간과 operation/freshness 시간은 분리됩니다. 단계는 중첩될 수 있으므로 duration을 단순 합산하지 마세요. 실제 MCP 응답 직렬화·네트워크·클라이언트 렌더링 시간은 해당 단계 로그에 포함되지 않습니다.
-
-## 도구 입력 예제
-
-모든 도구는 원본 소스와 DB에 읽기 전용입니다. 일반 페이지 조회 도구는 `offset`과 `limit`을 받습니다. `find_ui_actions`의 `limit`은 1~20이며 기본값은 5입니다. 줄 번호는 1부터 시작합니다. C# 전체 본문은 원문에서 읽고 SQL 정의는 지원 도구에서 `includeDefinition`으로 요청합니다.
-
-| 도구 | 입력 예제 |
+| 도구 | 용도와 주요 인자 |
 |---|---|
-| select_database_source | `{"mode":"SqlFiles","sqlFolder":"E:\\DatabaseScripts"}` |
-| get_database_status | `{}` |
-| refresh_database_source | `{}` |
-| find_sql_object | `{"query":"Reception","includeDefinition":false}` |
-| find_sql_object · 정의 위치 | `{"query":"dbo.usp_update_SmartInfoReception","limit":1,"locationsOnly":true}` |
-| ping | `{}` |
-| load_solution | `{"solutionPath":"D:\\Projects\\Sample\\Sample.sln"}` |
-| get_analysis_status | `{}` |
-| reload_solution | `{}` |
-| find_symbol | `{"query":"Save","offset":0,"limit":100}` |
-| get_symbol_overview | `{"symbol":"find_symbol에서 반환한 타입 ID"}` |
-| find_references | `{"symbol":"선택한 심볼 ID"}` |
-| search_text | `{"text":"usp_TestSave"}` |
-| find_event_handlers | `{"file":"D:\\Projects\\Sample\\UI\\SampleForm.cs","query":"Save"}` |
-| find_ui_actions | `{"query":"접수 저장","limit":5}` |
-| trace_procedure_path | `{"symbol":"<exact symbol id>","procedure":"dbo.usp_TestSave"}` |
-| find_procedure_usage | `{"procedure":"dbo.usp_TestSave"}` |
-| analyze_procedure | `{"procedure":"dbo.usp_TestSave","includeDefinition":false}` |
-| find_database_calls | `{"symbol":"Demo.Data.SaveService.Save","maxDepth":3,"maxMethods":32}` |
-| trace_code_to_database | `{"symbol":"선택한 메서드 ID","maxDepth":5,"maxNodes":200}` |
-| trace_procedure_to_ui | `{"procedure":"dbo.usp_TestSave","maxDepth":5,"maxNodes":200}` |
+| ping | 연결 확인 |
+| prepare_indexes | 명시적 C#·UI·SQL 일괄 준비. rebuild 기본 false(증분), true(전체 재생성). 완료 후 MCP 재연결. [사용법](index-preparation.md) |
+| load_solution | solutionPath: 절대 소스 폴더 또는 .sln. 파일 목록만 먼저 준비 |
+| get_analysis_status / reload_solution | 마지막 소스 색인 상태 / 파일 변경 대조 |
+| find_ui_actions | query: 접수 저장 또는 접수저장, limit 기본 5 |
+| find_event_handlers | file: C#·Designer 경로, query: 버튼·핸들러명 |
+| search_text | text: 원문 문자열, directory: 알려진 폴더, extension: .cs·.Designer.cs·.config·.xml·.sql |
+| find_symbol | query: 식별자·전체 선언명, offset/limit. 기본 20건 |
+| get_symbol_overview | symbol: 소스 ID 또는 절대 C# 파일. 선언·멤버 목록 |
+| find_reference_candidates | symbol: 선언 ID. 같은 이름의 구문상 사용 후보 |
+| find_procedure_usage | procedure: SQL 이름. 문자열 리터럴 후보, IsVerifiedCall=false |
+| find_database_calls | symbol: 메서드 ID·전체 이름, limit 기본 20. 현재 메서드 DB 후보와 methodCandidates |
+| select_database_source | mode: SqlFiles, sqlFolder: 로컬 SQL 폴더 절대 경로 |
+| get_database_status / refresh_database_source | SQL 색인 상태 / 파일 변경 대조 |
+| find_sql_object | query, offset/limit, locationsOnly 또는 includeDefinition |
+| analyze_procedure | procedure, includeDefinition. SQL 정의 출처와 직접 참조 |
 
-get_symbol_overview에는 절대 C# 파일 경로도 전달할 수 있습니다. 파일은 로딩된 솔루션의 분석 문서여야 합니다.
+## 검색 범위와 반환 의미
 
-## 근거 종류
+- 전체 이름은 일치하는 파일명을 우선합니다. 범위를 끝까지 검색하지 않은 경우 경고를 반환하며 추가 선언이 없다는 뜻이 아닙니다. 미발견 시 소스 후보 범위를 넓힙니다. 광범위 문자열·이름 참조 검색은 큰 폴더에서 오래 걸릴 수 있습니다.
+- CommandConfiguration은 현재 메서드에서 이름이 설정됐다는 뜻입니다. 미사용 변수·조건 분기·나중 변경을 원문에서 확인합니다.
+- AdapterCommandCandidate는 이름·파일명이 일치하는 Adapter의 행 상태 설정입니다. 실제 타입·상속·전달 행 상태는 확인 필요입니다. 찾지 못한 Adapter는 unresolved로 남깁니다.
+- methodCandidates의 다음 호출명을 선택해 선언·원문 검색을 이어갑니다. 자동 재귀 탐색은 하지 않습니다.
+- 후보 목록이 limit에 걸리면 truncated를 확인하고 범위를 좁히거나 한도를 조정합니다.
+- locationsOnly와 includeDefinition을 동시에 사용할 수 없습니다. SQL은 로컬 파일만 읽습니다.
 
-- TextMatch: 문자열·상수 후보. 호출을 의미하지 않음.
-- RoslynReference: 심볼의 실제 참조 위치. 호출을 의미하지 않음.
-- RoslynInvocation: 컴파일 모델에서 호출 대상 확인.
-- EventSubscription: 이벤트 처리기 연결. 이벤트 발생을 의미하지 않음.
-- DispatchCandidate: 인터페이스 호출의 구현 후보. 실행 대상 확인 필요.
-- ConfiguredProcedureCall: Roslyn으로 해석한 메서드와 외부 DB 래퍼 계약이 일치.
-- ProcedureCommandConfiguration: DbCommand 생성 시 StoredProcedure와 상수 CommandText 설정을 확인. 실행 확인이 아니므로 verified flow에서 제외.
-- SqlDependency: 로컬 SQL의 의존관계. 파일·줄과 Insert/ReadCandidate 등의 문법 근거를 표시.
+## 2.0 API 변경
 
-프로시저 주석은 search_text에서 발견할 수 있으나 find_procedure_usage의 호출 결과에는 포함되지 않습니다. 후보는 해당 위치를 포함하는 Roslyn 심볼과 함께 반환합니다.
-
-`search_text`는 마지막으로 로드한 솔루션의 검색 루트에서 현재 디스크 파일을 읽습니다. 의미 분석 변경 검사를 수행하지 않으며, 응답의 snapshot ID는 마지막 의미 분석 상태를 가리킵니다.
-
-정방향 추적은 탐색 중인 심볼의 선언 문서에서 등록된 DB 래퍼 호출을 확인합니다. 전체 솔루션의 문자열 후보가 필요한 경우 `find_procedure_usage`를 사용합니다.
-
-`trace_procedure_path`는 지정 프로시저로 이어지는 경로 한 개를 반환합니다. 일반 정적 연결을 우선하고, 필요하면 WCF 호스트 후보부터 별도 한도로 탐색합니다. 구현 후보를 경유하면 `Candidate`로 표시합니다. `NotConnected`는 탐색 범위에서 연결을 찾지 못했다는 뜻입니다. SQL 직접 의존관계는 연결 여부와 별도로 반환합니다. 변경 후보, 실행 참조, 분류 미확정 항목을 보존하며 `Read`와 `ReadCandidate`만 최대 8개로 제한합니다. 전체 개수는 `dependencyCount`에 표시합니다.
-
-## 실패·제한 상태
-
-- NotLoaded: C# 작업 공간 또는 SQL 파일 색인이 아직 로드되지 않은 상태.
-- Partial: 일부 프로젝트 오류, 구현 후보, SQL 자료의 미해결 참조 또는 탐색 제한 등. 응답의 진단을 확인합니다.
-- Ambiguous: 동일 프로시저명이 여러 스키마에 존재. schema.name 필요.
-- truncated: 깊이·노드·검색 결과 제한으로 일부 결과 생략.
-
-모호한 C# 이름은 오류와 함께 정확한 심볼 ID 선택을 요청합니다. 재로딩하면 ID와 캐시가 바뀝니다. 코드와 배포된 DB 정의가 같은 버전인지 별도 확인해야 합니다.
-
-`NotFoundInProvidedFiles`가 반환되면 지정한 SQL 폴더에 해당 정의가 포함되어 있는지 확인하세요. [로컬 SQL 폴더와 색인](sql-sources.md)
-
-`find_database_calls`는 메서드에서 도달할 수 있는 정적 SQL 실행 근거를 요약합니다. 생성 TableAdapter의 저장 명령, 상수가 확정된 직접 DB 명령, 등록된 프로시저 래퍼를 반환합니다. `site`, `via`, `unresolved`의 위치는 `[files의 0 기반 인덱스, 1 기반 줄 번호]`입니다. 상대 경로는 `solutionRoot`를 기준으로 합니다. 메서드별 한 경로를 유지하며, 실행 대상을 해석하지 못한 위치와 탐색 한도는 응답에 표시합니다.
-
-`find_ui_actions`는 솔루션의 C# 프로젝트 폴더에서 Designer의 이벤트 구독, 폼·컨트롤 문구, 대응 핸들러와 메뉴의 폼 생성 근거를 색인합니다. 폼 경로를 모르고 시작하는 검색에 사용합니다. 기본 리소스 파일에서 `ApplyResources` 문구를 읽을 수 있고, 저장·수정 같은 동작은 코드 식별자와 함께 검색합니다. `StaticCandidates` 응답에서 파일·줄을 확인한 뒤 핸들러 본문을 읽어 실행 조건을 판단합니다. Roslyn 컴파일 작업 공간을 열 필요가 없습니다. 설정된 코드 캐시가 있으면 메모리와 디스크 색인을 재사용합니다.
+- find_references는 find_reference_candidates로 대체했습니다. 실제 심볼 참조 판별이 아닙니다.
+- trace_code_to_database, trace_procedure_to_ui, 두 compact 변형, trace_procedure_path는 제거했습니다.
+- find_database_calls의 maxDepth/maxMethods와 압축 위치 응답을 제거했습니다. 현재 메서드 후보·파일·줄·다음 키워드만 반환합니다.
+- LiveDatabase와 연결 문자열 설정은 제거했습니다.
+- Ready는 파일 목록/검색 준비 상태입니다. 구문 진단은 실제 읽은 파일에 한정되며 CompilationErrors는 미평가(null 또는 생략)입니다.

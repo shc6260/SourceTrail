@@ -1,128 +1,270 @@
-# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP
+# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 2.0
 
-C# WinForms의 화면·이벤트에서 메서드와 DB 호출을 찾고, SQL Server 스크립트에서 객체 정의와 참조를 확인하는 읽기 전용 MCP 서버입니다. 로컬에서 stdio로 실행하며 분석 근거를 파일과 줄 번호로 반환합니다.
+C# WinForms의 화면·이벤트에서 서비스와 DB 호출 위치를 찾고, 로컬 SQL 파일에서 프로시저 정의와 직접 참조를 확인하는 MCP 서버입니다. 파일·줄 번호를 근거로 **MCP로 위치 찾기 → 원문에서 실제 이름 확인 → 그 이름으로 MCP 재검색** 순서로 사용합니다.
 
-DB 검색은 **로컬 SQL 파일 폴더를 색인하는 `SqlFiles` 모드**로 진행합니다. 프로시저·테이블·뷰·함수의 정의와 참조를 조사할 때 이 색인을 재사용합니다.
+C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지 않습니다. DB는 `SqlFiles`만 지원하고 SQL Server에 접속하지 않습니다. 검색은 원본을 읽고, 색인 준비·갱신은 로컬 캐시만 저장합니다. 반환된 이름·Adapter 매핑은 정적 후보이므로 실제 연결과 조건은 원문으로 확인합니다.
+
+- [Codex 설치 프롬프트](#codex에-설치-맡기기)
+- [실행·검색 순서](#실행검색-순서)
+- [일괄 색인 생성·갱신](#일괄-색인-생성갱신)
+- [효율적으로 사용하는 프롬프트](#효율적으로-사용하는-프롬프트)
+- [성능 측정의 범위](#성능-측정의-범위)
 
 ## Codex에 설치 맡기기
 
-아래 프롬프트를 Windows의 Codex에 붙여넣으세요. 두 경로를 미리 적을 수 있고, 비워 두면 Codex가 누락된 경로를 물어봅니다. SQL 폴더는 프로젝트 안의 `CheckupDatabase\Latest`처럼 분석할 `.sql` 파일을 담은 폴더면 됩니다.
-
-**이 프롬프트의 설치 기본값**
-
-| 항목 | 신규 설치 시 적용되는 설정 |
-|---|---|
-| MCP 등록 | `sourcetrail`을 로컬 stdio 서버로 등록합니다. `dotnet`이 빌드된 `SourceTrail.Mcp.dll`을 실행합니다. |
-| C# 분석 대상 | 입력한 `.sln`을 기본 솔루션으로 설정합니다. 폴더를 받으면 그 안에서 확인한 솔루션 경로를 사용합니다. |
-| SQL 분석 대상 | `SqlFiles` 모드로 지정 폴더와 하위 폴더의 `.sql`을 읽습니다. |
-| 캐시 | C# 디스크 색인은 `%LOCALAPPDATA%\SourceTrail\code-cache`, SQL 파일 색인은 `%LOCALAPPDATA%\SourceTrail\cache`를 사용합니다. |
-| 대기 시간 | MCP 연결 30초, 도구 호출당 300초를 설정합니다. |
-
-기존 등록을 갱신할 때는 확인한 분석 경로와 모드를 적용하고, 이미 지정된 캐시 경로와 대기 시간은 유지합니다.
+아래 프롬프트를 Windows의 Codex에 붙여넣으세요. 소스와 SQL 경로는 자신의 경로로 채웁니다. 비워 두면 설치 에이전트가 확인하도록 되어 있습니다. `.sln` 없이 소스 폴더를 지정해도 됩니다.
 
 ```text
-이 Windows PC에 SourceTrail MCP를 설치하고 현재 Codex에 등록해줘.
-저장소는 https://github.com/shc6260/SourceTrail 이야.
-설치 방법을 설명하는 데서 멈추지 말고, 가능한 단계는 직접 실행해줘.
+이 Windows PC에 SourceTrail MCP 2.0을 설치하고 현재 Codex에 등록해줘.
+저장소: https://github.com/shc6260/SourceTrail
+설명에서 멈추지 말고, 확인된 경로와 아래 절차로 설치를 진행해줘.
 
-프로젝트 경로(.sln 파일 또는 프로젝트 폴더):
-DB 스크립트 폴더(.sql 파일이 있는 폴더):
+C# 소스 경로(.sln 파일 또는 소스 폴더):
+SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
-1. 두 경로 중 비어 있거나 예시 값만 적힌 항목은 사용자에게 다시 물어봐 줘. 답을 받기 전에는 누락된 경로를 추정해서 등록하지 말아줘. 프로젝트 폴더 안의 .sln이 하나면 그 경로를 쓰고, 여러 개면 선택을 요청해줘. 경로를 읽을 수 없거나 .sln을 찾지 못하면 경로를 다시 받아줘.
-2. 기존 SourceTrail 등록과 체크아웃을 확인해줘. 사용할 수 있는 체크아웃이 없으면 사용자 폴더에 저장소를 복제해줘. Git이나 .NET 10 SDK가 없으면 공식 배포본으로 설치하고, 권한 승인이 필요한 경우에만 알려줘.
-3. 저장소의 README에 나온 publish 명령을 실행하고, 생성된 SourceTrail.Mcp.dll의 절대 경로를 확인해줘. 기존 소스 변경사항이 있으면 덮어쓰지 말아줘.
-4. docs/codex-registration.md를 따라 sourcetrail을 로컬 stdio 서버로 등록해줘. Analysis__SolutionPath에 확인한 .sln 절대 경로를, Database__SqlFolder에 SQL 폴더 절대 경로를 넣고 Database__Mode는 SqlFiles로 설정해줘. 캐시와 대기 시간은 README의 설치 기본값을 적용하되 기존에 설정된 값은 유지해줘. C# 캐시를 새로 설정할 때는 %LOCALAPPDATA%를 실제 절대 경로로 변환해서 Analysis__CodeCacheDirectory에 넣어줘. 다른 MCP 항목은 유지하고 기존 sourcetrail 항목은 중복 없이 갱신해줘.
-5. 실제 MCP에서 ping을 호출해 pong을 확인해줘. get_analysis_status를 조회하고, 지정한 .sln이 활성 상태가 아니면 load_solution으로 열어서 경로·상태·진단을 확인해줘. refresh_database_source로 SQL 폴더를 읽고 get_database_status로 모드·폴더·색인 파일 수·진단을 확인해줘. 현재 대화에 도구가 안 보이면 등록 결과와 실제 연결 검증 여부를 구분하고, 재연결 방법을 알려줘.
+1. 비어 있거나 예시 값인 경로는 사용자에게 확인한다. 답을 받기 전에 추정하지 않는다.
+   소스 폴더는 .sln 없이 그대로 사용할 수 있다. 파일·폴더가 실제로 읽히는지 확인한다.
+2. 기존 SourceTrail 등록과 체크아웃을 확인한다. 없으면 사용자 폴더에 저장소를 복제한다.
+   기존 변경사항은 덮어쓰지 않는다. Git과 .NET 10 SDK가 없으면 공식 배포본으로 설치하고
+   권한 승인이 필요한 경우에만 알린다.
+3. 저장소에서 아래 명령으로 publish하고 실행 DLL의 절대 경로를 확인한다.
+   dotnet publish src/SourceTrail.Mcp/SourceTrail.Mcp.csproj -c Release -o artifacts/server
+   실행에는 publish 폴더 전체를 보관한다. 분석 대상 프로젝트의 컴파일·빌드는 하지 않는다.
+4. 일괄 색인 저장소를 정한다. 기본은 실제 MCP 실행 사용자의
+   %LOCALAPPDATA%\SourceTrail\prepared-index이며 실제 절대 경로로 확정한다.
+   기존에 지정한 저장소가 있으면 유지한다. Codex 프로젝트 폴더에 임의로 만들지 않는다.
+5. 최초 일괄 색인을 생성한다.
+   dotnet <실행 DLL 절대 경로> prepare-index --source <확인한 C# 경로>
+     --sql-folder <확인한 SQL 폴더> --index-directory <확정한 색인 저장소>
+   위 인수는 한 명령에 전달하고 공백을 포함한 경로는 인용한다.
+   기존 C#·SQL 캐시 설정이 있으면 명령에도 같은 설정이나 환경변수로 전달한다.
+   기본 증분 모드를 사용한다. 사용자가 전체 재생성을 명시한 경우에만 --rebuild를 붙인다.
+   기존 색인을 먼저 지우지 않는다. 종료 코드 0과 Published=true를 확인한다.
+   생성·재사용 건수, 구문 진단·SQL 경고, 단계별 시간을 기록한다.
+   실패하면 설치 완료로 보고하지 않는다.
+6. docs/codex-registration.md에 따라 sourcetrail을 로컬 stdio MCP 서버로 등록한다.
+   command는 dotnet, args는 publish한 SourceTrail.Mcp.dll의 절대 경로로 지정한다.
+   Analysis__SolutionPath, Database__SqlFolder는 준비에 사용한 경로와 같게 설정한다.
+   Database__Mode=SqlFiles, Indexing__Directory는 4~5번과 같은 절대 경로를 사용한다.
+   신규 설치 권장값은 Analysis__WatchCodeFiles=true,
+   Analysis__CodeRescanIntervalSeconds=30이다. 사용자가 명시한 기존 설정은 유지한다.
+   연결 대기 30초·도구 대기 300초를 신규 기본값으로 사용하고 기존 값은 유지한다.
+   다른 MCP 등록을 변경하지 않고 sourcetrail을 중복 등록하지 않는다.
+7. MCP를 새로 연결하고 ping의 pong을 확인한다.
+   설정된 소스에서 실제로 확인한 식별자로 선언 검색을 한 번 수행하고,
+   실제 SQL 파일에서 확인한 객체명으로 find_sql_object를 호출한다.
+   상태·대상 경로·파일 수·주요 진단을 확인한다.
+   일괄 준비가 성공했으면 검증을 위해 전체 재생성이나 refresh를 반복하지 않는다.
+   현재 대화에 도구가 보이지 않으면 등록 완료와 실제 호출 검증 여부를 구분하고
+   재연결이 필요하다고 설명한다.
 
-설치 후 실제 설정값과 각 항목의 의미를 아래 표로 반환해줘.
+설치 결과를 표로 정리해줘:
+- 저장소·실행 DLL 위치
+- Codex 설정 파일과 MCP 실행 명령
+- C#·SQL 분석 대상
+- 일괄 색인 저장소, 활성 세대, 생성·재사용 건수와 주요 경고
+- 변경 감지 설정과 연결·호출 대기 시간
+- 연결 및 실제 검색 검증 결과
 
-| 항목 | 적용값 또는 확인 결과 | 의미 |
-| --- | --- | --- |
-| 설치 위치 | 저장소와 실행 DLL의 절대 경로 | 설치된 파일 위치 |
-| Codex 등록 | 설정 파일 경로, 서버 이름, 실행 명령·인자 | Codex가 서버를 시작하는 방법 |
-| 프로젝트 | 실제 .sln 절대 경로 | C# 분석 대상 |
-| DB 분석 | 실제 모드와 SQL 폴더 절대 경로 | SQL 정의와 참조를 읽는 자료 |
-| 캐시 | C#·SQL 캐시의 실제 경로 또는 미사용 | 재사용하는 색인의 저장 위치 |
-| 대기 시간 | 연결·호출 제한 시간 | Codex가 기다리는 시간 |
-| 연결 검증 | ping 응답 또는 확인 필요 | 현재 대화에서 MCP 호출 가능 여부 |
-| 분석 검증 | C# 상태, SQL 상태·색인 파일 수, 주요 경고 | 분석 준비 범위와 누락 항목 |
-
-확인하지 못한 항목은 확인 필요로 표시해줘. 분석 대상 소스와 SQL 원본은 읽기만 해줘. DB 관련 검색은 지정한 로컬 SQL 폴더에서만 하고 SQL Server에 직접 접속하지 말아줘.
+확인 못 한 내용은 확인 필요로 표시한다.
+원본 소스·SQL은 수정하지 않고, SQL Server 접속·SQL 실행·운영 반영은 하지 않는다.
 ```
 
-## 성능 실측
+### 설치 기본값과 저장 위치
 
-**접수 저장 조사에서 같은 파일·줄 근거를 찾는 도구 시간이 3.069초 → 1.045초로 줄었습니다(약 66% 단축).** 직접 검색과 **MCP 검색 → 원문 확인 → MCP 재검색**을 비교한 결과입니다. 저장 이벤트에서 서비스 구현, DB 호출, 로컬 SQL 정의까지 조사했습니다.
-
-준비 후 각 3회 중앙값입니다. PowerShell 시작 시간을 빼면 **1.915초 → 0.820초**였으며, AI 판단과 답변 작성 시간은 측정에서 제외했습니다. 초기 준비를 포함한 첫 실행은 직접 검색 3.193초, MCP를 활용한 조사 47.915초였습니다.
-
-## 구조와 동작 원리
-
-Codex가 로컬 SourceTrail 서버에 검색을 요청하면, 서버는 질문에 맞는 방식으로 소스와 SQL 파일을 읽습니다.
-
-| 조사 단계 | SourceTrail이 하는 일 |
+| 항목 | 기본·권장값 |
 |---|---|
-| 화면·이벤트 찾기 | `find_ui_actions`가 “접수 저장” 같은 업무 문장을 화면·메뉴·버튼 문구와 대조합니다. WinForms Designer의 이벤트 구독과 핸들러 위치를 반환합니다. |
-| 서비스·DB 호출 따라가기 | 호출 이름을 확인한 뒤 서버 구현 위치를 좁혀 검색합니다. 호출 대상을 해석할 때는 Roslyn으로 심볼·참조를 읽고, 확인된 서버 메서드에서 DB 실행 근거를 찾습니다. |
-| SQL 정의·참조 확인 | `SqlFiles`가 지정 폴더와 하위 폴더의 `.sql`을 읽어 정의와 직접 참조를 색인합니다. 확인한 프로시저 이름으로 정의의 파일·줄과 의존관계를 조회합니다. |
+| 실행 방식 | 로컬 stdio, `dotnet` + publish된 `SourceTrail.Mcp.dll` |
+| 분석 대상 | 확인한 절대 소스 폴더 또는 `.sln`, 로컬 SQL 폴더 |
+| 일괄 색인 | `%LOCALAPPDATA%\SourceTrail\prepared-index` |
+| 활성 세대가 없을 때 C# 캐시 | `Analysis.CodeCacheDirectory`. 빈 값이면 C# 디스크 재사용 비활성화 |
+| 활성 세대가 없을 때 SQL 캐시 | `%LOCALAPPDATA%\SourceTrail\cache` |
+| 변경 확인 | 설치 프롬프트·배포 예제는 `WatchCodeFiles=true`, 30초 주기. 설정 생략 시 라이브러리 기본은 `false` |
+| 연결·도구 대기 | 신규 설치 권장 30초·300초 |
 
-화면 검색은 C# 의미 분석 작업 공간을 열기 전에도 가능합니다. 같은 입력은 캐시를 재사용하고, 파일 변경을 확인해 필요한 색인을 갱신합니다. [구성 요소와 캐시 상세](docs/architecture.md)
+일괄 색인은 Codex 프로젝트 폴더와 별개입니다. **어떤 Codex 프로젝트를 열었는지가 아니라 MCP에 설정된 소스·SQL 경로를 따릅니다.** 저장소 하나에는 활성 세대 하나가 있고, 소스·SQL 경로가 모두 일치할 때 해당 세대의 캐시를 사용합니다. 여러 분석 대상을 각각 유지하려면 저장소와 MCP 설정을 분리하세요. Codex 프로젝트별 자동 분리 기능은 없습니다.
 
-## Codex에서 사용하는 방법
+설정은 실행 DLL 옆 `appsettings.json` 또는 MCP 환경변수로 지정합니다. 환경변수가 JSON보다 우선합니다. `Indexing.Directory`를 생략하면 기본 저장소를 사용하며, 별도 경로를 지정하면 준비 명령과 MCP 설정을 동일하게 맞춰야 합니다. 활성 세대가 일치하면 그 안의 C#·SQL 캐시가 개별 캐시 경로보다 우선합니다.
 
-**권장 흐름은 MCP로 위치 찾기 → 원문에서 흐름 확인 → 확인한 이름으로 MCP 재검색입니다.** 화면 이름을 모르면 `find_ui_actions`로 이벤트 후보를 찾습니다. Codex가 핸들러와 관련 메서드의 원문을 읽어 다음 호출명이나 서비스 계약을 확인한 뒤, 그 이름을 다음 MCP 검색에 넘겨 서버 구현·DB 호출·SQL 정의를 좁혀갑니다. 후보가 없거나 연결이 불명확하면 해당 구간의 원문을 확인하고, 확보한 근거부터 이어갑니다.
+## 실행·검색 순서
 
-Codex 대화창에 아래 예시를 붙여넣으면 이 순서로 조사를 요청할 수 있습니다.
+### 설치할 때
 
 ```text
-SourceTrail MCP로 접수 저장 로직을 찾아줘.
-먼저 MCP로 저장 버튼과 이벤트 후보를 찾아줘.
-핸들러와 관련 메서드의 원문을 읽어 실제 서비스 호출명과 계약을 확인해줘.
-확인한 이름으로 MCP를 다시 써서 서버 구현과 DB 호출 위치를 찾고, 확인된 프로시저의 SQL 정의까지 조회해줘.
-단계별 파일·줄 번호를 보여주고, 후보이거나 연결을 확인하지 못한 부분은 확인 필요로 표시해줘.
+소스·SQL 경로 확인 → publish → 최초 일괄 색인 생성 → 파일로 저장
+→ MCP 등록 → 연결 → 실제 검색 검증
 ```
 
-| 알고 있는 정보 | 이렇게 요청하세요 | Codex가 사용할 도구 |
-|---|---|---|
-| 업무 동작만 앎 | “SourceTrail MCP로 검사 결과 저장 버튼과 이벤트를 찾아줘.” | `find_ui_actions`로 후보를 찾고, 0건이면 메뉴·화면 제목이나 Designer 원문을 확인합니다. |
-| 서버 메서드명을 앎 | “SourceTrail MCP로 `Set_InfoResult`가 호출하는 DB 프로시저와 파일·줄을 찾아줘.” | `search_text`로 서버 구현 위치를 찾고, 확인된 메서드를 `find_database_calls`로 조사합니다. `FillBy` 조회는 어댑터 원문을 확인합니다. |
-| 프로시저명을 앎 | “SourceTrail MCP로 `dbo.usp_update_SmartInfoReception` 정의와 직접 의존관계를 찾아줘.” | `find_sql_object`로 정의 위치를 찾고, `analyze_procedure`로 참조를 확인합니다. |
+### MCP를 실행할 때
 
-설치 때 설정한 솔루션과 SQL 폴더를 그대로 쓰면 질문마다 경로를 입력할 필요가 없습니다. 다른 대상을 조사할 때는 `.sln`이나 SQL 폴더 경로를 질문에 적으세요. [도구별 입력 예제와 영향 범위 조사](docs/tools.md)
+```text
+MCP 실행 → 설정 읽기 → 분석 경로와 일치하는 활성 색인 선택 → 요청 대기
+```
 
-## 문서 바로가기
+일괄 색인이 있어도 시작 즉시 모든 내용을 메모리에 읽지는 않습니다. 첫 관련 요청에서 파일 목록·캐시를 확인하고 필요한 색인을 메모리에 올립니다.
 
-- [설치·Codex 설정](docs/codex-registration.md) — 등록 예제, 기본 솔루션·SQL 폴더 설정, 연결 확인
-- [사용법과 요청 예제](docs/tools.md) — 화면 이벤트에서 WCF·DB 호출·SQL 정의까지 조사하는 순서
-- [구조와 동작 원리](docs/architecture.md) — 화면 검색, Roslyn 의미 분석, 디스크 캐시
-- [SQL 자료와 캐시](docs/sql-sources.md) — 로컬 SQL 폴더 설정과 색인 갱신
-- [지원 범위와 제한](docs/limitations.md) — WCF·TableAdapter 등 원문 확인이 필요한 경우
+```text
+첫 C# 선언 요청 → 파일 목록·메타데이터 대조 → 저장된 선언 재사용
+첫 UI 요청      → UI 입력 메타데이터 대조 → UI 캐시 로딩 또는 생성
+첫 SQL 요청     → 저장된 SQL 캐시 로딩 → 목록·메타데이터 대조 → 변경분 갱신
+```
 
-## 수동 설치 및 등록
+일괄 색인을 아직 만들지 않았다면 필요한 요청 시점에 준비합니다. C#은 파일 목록을 먼저 만들고 필요한 선언을 구문 분석하며, SQL은 지정 폴더의 정의를 색인합니다. UI는 별도 색인을 사용합니다.
 
-Windows에서 .NET 10 SDK가 필요합니다. 레거시 C# 솔루션을 의미 분석하려면 해당 프로젝트의 참조 어셈블리, 외부 DLL 및 MSBuild targets도 준비되어 있어야 합니다.
+### 실행 중 계속 사용할 때
 
-저장소 루트에서 실행합니다.
+```text
+요청 → 메모리 색인 재사용 → 필요한 위치·후보 반환
+변경 알림 또는 대조 주기 경과 → 다음 요청에서 변경 확인·갱신 → 응답
+```
+
+C# 감시 모드와 SQL 감시는 알림·주기를 사용합니다. UI는 조회 시 입력 메타데이터의 fingerprint를 비교하고, 바뀌면 UI 색인을 다시 만듭니다. 감시 알림 전달 전에는 짧은 지연이 있을 수 있고, 감시 오류 시 전체 대조로 복귀합니다. 요청마다 C#을 대조해야 하면 `WatchCodeFiles=false`를 사용합니다.
+
+### 실제 코드 조사를 할 때
+
+```text
+사용자 지시 → MCP로 후보 위치 찾기 → 핸들러·관련 메서드 원문 읽기
+→ 실제 호출명·계약·인수 확인 → 그 이름으로 MCP 재검색
+→ 필요한 다음 연결만 반복 → 확인된 프로시저의 SQL 정의 확인 → 보고
+```
+
+MCP는 위치와 후보를 찾습니다. 원문의 호출 관계·조건 분기·인수·행 상태를 대조하는 작업이 필요합니다. 원문에서 연결을 확인했다면 같은 연결을 전체 사용처 검색으로 다시 검증할 필요는 없습니다.
+
+## 일괄 색인 생성·갱신
+
+C# 선언 → WinForms UI → SQL 정의·직접 참조를 미리 분석해 로컬 파일에 저장합니다. 컴파일러·MSBuild·DB 연결은 사용하지 않습니다. 준비 비용을 설치·갱신 단계로 옮기는 기능이며 첫 메모리 로딩 비용까지 없어지는 것은 아닙니다.
+
+### CLI
+
+publish 후 PowerShell에서 실행합니다. 아래 소스·SQL 경로는 자신의 경로로 바꾸세요.
+
+```powershell
+$preparedIndex = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'SourceTrail\prepared-index'
+dotnet .\artifacts\server\SourceTrail.Mcp.dll prepare-index `
+  --source 'D:\Projects\Sample\Sample.sln' `
+  --sql-folder 'D:\Projects\Sample\DatabaseScripts' `
+  --index-directory $preparedIndex
+```
+
+DLL 옆 설정이나 환경변수에 대상과 저장소가 지정돼 있다면 다음처럼 실행할 수도 있습니다.
+
+```powershell
+dotnet .\artifacts\server\SourceTrail.Mcp.dll prepare-index
+```
+
+| 요청 | 동작 |
+|---|---|
+| `prepare-index` | 기존 결과를 재사용하며 변경·추가 파일을 분석하고 삭제 파일을 제외 |
+| 같은 명령에 `--rebuild` 추가 | 기존 캐시를 사용하지 않고 전체 재생성 |
+| MCP `prepare_indexes`에 `{}` | 설정된 경로로 일괄 생성·증분 갱신 |
+| MCP `prepare_indexes`에 `{"rebuild":true}` | 설정된 경로로 전체 재생성 |
+
+C#·SQL의 메타데이터가 같으면 캐시를 재사용합니다. SQL은 변경 파일의 내용 해시를 비교해 실제 내용이 달라진 파일만 다시 파싱합니다. UI 입력이 달라지면 UI 색인 전체를 다시 생성합니다. 크기·시각을 모두 유지한 오프라인 수정은 메타데이터만으로 구분하지 못할 수 있으므로 전체 재생성으로 확인할 수 있습니다.
+
+### 완료·실패와 재연결
+
+```text
+별도 작업 세대에 생성 → 입력 변경 여부 재확인 → 완료된 세대를 활성화
+실패·취소 → 기존 활성 색인 유지 → 이번 미완료 작업만 정리
+```
+
+결과에는 `Published`, 생성·재사용 건수, 구문 진단·SQL 경고, 단계별 시간이 나옵니다. CLI 종료 코드는 완료 0, 실패 1, 취소 130입니다. `Published=true`여도 구문 진단이나 SQL `Partial` 경고를 확인해야 합니다. 모든 객체나 실행 관계의 완전성을 뜻하지 않습니다.
+
+기존 활성 색인을 먼저 지우지 않습니다. 이전 세대는 실행 중인 MCP가 참조할 수 있어 자동 삭제하지 않으며, 재생성에는 추가 디스크 공간이 필요합니다. **새 세대를 사용하려면 MCP를 재연결합니다. 재연결 때문에 색인을 다시 만들 필요는 없습니다.**
+
+원본 SQL 정의와 소스 선언이 캐시에 포함되므로 로컬 캐시를 공개 저장소에 올리지 마세요. 큰 프로젝트에서는 선언 캐시의 크기·메모리 로딩 비용이 커질 수 있습니다. [세부 동작과 반환값](docs/index-preparation.md)
+
+## 효율적으로 사용하는 프롬프트
+
+아래는 실제 조사용 프롬프트입니다. 시작할 때 조사 범위를 고정하고, 원문에서 확인한 이름으로만 다음 연결을 찾습니다. 이름을 알고 있으면 전체 이름과 알려진 폴더로 범위를 좁히세요. 이 프롬프트가 특정 응답시간을 보장하는 것은 아닙니다.
+
+```text
+SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
+
+대상은 MCP에 설정된 C# 소스와 로컬 SQL 폴더(SqlFiles)를 사용한다.
+주요 접수정보·접수항목의 개별/일괄 저장, Added/Modified/Deleted 및 후처리를 확인한다.
+별도 화면·예약·외부연동·출력과 SQL 내부 호출의 재귀 추적은 제외한다.
+
+1. find_ui_actions에 "접수 저장"을 전달한다.
+   버튼 문구와 이벤트 원문으로 신규 접수·수정 버튼을 구분한다.
+2. 후보의 핸들러와 저장 메서드 원문을 읽어 실제 호출명·계약·인수를 확인한다.
+   이름을 추정해서 먼저 검색하지 않는다.
+3. 확인한 식별자·전체 이름으로 find_symbol 또는 범위를 좁힌 search_text를 사용한다.
+   반환된 소스 ID는 추정·재작성하지 말고 그대로 다음 도구에 전달한다.
+   알려진 C# 절대 경로는 get_symbol_overview에 사용할 수 있다.
+4. find_database_calls는 현재 메서드 하나만 조회한다. symbol과 limit을 사용하고
+   methodCandidates와 원문에서 필요한 다음 연결만 골라 같은 순서로 이어간다.
+   maxDepth/maxMethods와 자동 전체 그래프 도구는 사용하지 않는다.
+5. 실제 WCF 계약, 인수 타입, 조건부 분기, 행 상태와 개별/일괄 방식을 원문으로 대조한다.
+   CommandText 설정·Adapter 매핑만으로 실제 실행을 단정하지 않는다.
+6. 연결을 원문으로 확인한 프로시저만 find_sql_object/analyze_procedure로 확인한다.
+   위치만 필요하면 locationsOnly=true, 본문 분석이 필요하면 정의와 직접 참조를 조회한다.
+
+조회 규칙:
+- search_text에는 확인한 코드 문자열과 알려진 directory·허용 extension을 사용한다.
+- 원문은 필요한 구간만 읽고 이미 읽은 같은 내용은 재사용한다.
+- 이미 확인한 연결을 전체 이름 사용처 검색으로 재검증하지 않는다.
+- find_reference_candidates 등 추가 사용처 조사가 필요하면 목적·범위를 먼저 설명하고 묻는다.
+- 파일명 우선 검색은 전체 범위 확인으로 단정하지 않는다.
+- truncated/unresolved와 Partial 경고를 확인하고 남은 부분은 확인 필요로 표시한다.
+- 요청한 범위의 근거를 확보하면 종료한다. 범위·진행 방식 변경은 먼저 물어본다.
+- 일반 조회를 위해 prepare_indexes/reload/refresh를 반복 실행하지 않는다.
+
+보고:
+단계별 파일·줄 번호와 확인한 정적 연결, 후보, 확인 필요사항을 간단히 나눠 보여준다.
+시간 기록을 요청받았다면 준비·도구별 응답·원문 확인·전체 조사·최종 정리를 구분한다.
+각 호출의 시각을 즉시 저장하고, 겹치는 대기를 중복 합산하지 않는다.
+실패·재시도도 포함하며 미계측 값은 추정해서 채우지 않는다.
+
+소스·설정 수정, 빌드, DB 접속, SQL 실행, 운영 반영은 하지 않는다.
+```
+
+첫 UI 결과가 없거나 동명이 많으면 화면 제목·메뉴·확인한 폴더를 이용해 후보를 좁힙니다. 범위를 바꿔야 하면 먼저 확인합니다. 요청한 분기를 생략하거나 SQL 개수를 임의로 줄여 빠르게 끝내는 규칙은 아닙니다.
+
+| 이미 알고 있는 정보 | 시작 방법 |
+|---|---|
+| 화면·업무 동작 | `find_ui_actions`에 화면과 동작을 분리한 짧은 문장 |
+| 메서드명·소스 파일 | 원문으로 이름 확인 후 제한한 `find_symbol`/`search_text`, 반환 ID로 후속 조회 |
+| 프로시저명 | `find_sql_object`로 정의 위치, 필요하면 `analyze_procedure`로 직접 참조 |
+
+## 성능 측정의 범위
+
+동일한 고정 5단계의 위치 조회 실험에서 준비 후 각 3회 중앙값은 다음과 같았습니다. 양쪽에 같은 원문 추출 절차를 포함했고, 실행 순서를 교대했습니다.
+
+| 수정 저장 경로의 고정 작업 | 직접검색 | MCP 혼합 |
+|---|---:|---:|
+| UI·원문 이름 추출·WCF 선언 4곳·DB 지점 3곳·SQL 정의 위치 1개 | 3.416초 | 1.869초 |
+| 같은 실행의 첫 표본(준비·조회 포함) | 3.932초 | 6.366초 |
+
+이 범위의 반복 도구 왕복은 약 45% 짧았습니다. 파일·줄 근거는 같았으며 현재 API에서 필요한 후속 조회·원문 읽기도 포함했습니다. 사전 색인 생성 시간, AI 판단과 답안 작성은 포함하지 않았습니다. 첫 표본은 기존 디스크 캐시를 사용했고 OS 캐시를 초기화하지 않았으므로 최초 설치·완전 cold start 시간은 아닙니다.
+
+이는 이름과 위치를 단계별로 전달하는 고정 절차의 결과입니다. 임의의 질문에 대한 전체 조사시간·정확도·토큰 사용량 개선을 보장하지 않습니다. 과거 v12 수치 1.045초는 다른 버전의 기록이며 현재 2.0의 수치로 사용하지 않습니다.
+
+## 지원 범위와 문서
+
+선언·참조·DB 명령은 파일·구문 기반 후보입니다. 오버로드·수신 타입·런타임 분기·실제 endpoint와 DB 배포를 자동으로 확정하지 않습니다. `Ready`는 색인/검색 준비 상태이며 컴파일 성공이 아닙니다. 전체 그래프·자동 WCF 연결·LiveDatabase는 2.0에서 제거했습니다.
+
+- [도구와 반환 의미](docs/tools.md)
+- [설정·Codex 등록](docs/codex-registration.md)
+- [일괄 색인 상세](docs/index-preparation.md)
+- [구조와 캐시](docs/architecture.md)
+- [SQL 정의·캐시](docs/sql-sources.md)
+- [변경 감지](docs/code-freshness.md)
+- [한계와 확인 필요사항](docs/limitations.md)
+
+## 수동 설치·검증
+
+서버를 publish하려면 .NET 10 SDK가 필요합니다. 분석 대상 프로젝트의 SDK·참조 DLL·MSBuild targets는 필요하지 않습니다.
 
 ```powershell
 dotnet publish src/SourceTrail.Mcp/SourceTrail.Mcp.csproj -c Release -o artifacts/server
 ```
 
-MCP 클라이언트에 명령을 `dotnet`, 인자를 `artifacts/server/SourceTrail.Mcp.dll`의 **절대 경로**로 등록합니다. Roslyn BuildHost를 함께 사용하므로 publish 폴더 전체를 보관하세요. Codex의 복사 가능한 설정과 연결 확인 순서는 [Codex 등록 및 설정](docs/codex-registration.md)에 있습니다.
+MCP에는 `dotnet`과 생성된 DLL 절대 경로를 등록합니다. publish 폴더 전체를 유지하고, 이 README의 일괄 준비 명령을 실행한 뒤 같은 경로 설정으로 연결하세요.
 
-## 연결 후 확인할 것
-
-- `get_analysis_status`와 `get_database_status`에서 분석 대상과 진단을 확인합니다. 시작 경로만 지정한 직후에는 첫 사용 전이라 `NotLoaded`일 수 있습니다.
-- UI 후보, 정적으로 연결된 호출, 실행 대상이 미확정인 후보를 구분합니다. `Partial`, `truncated`, 빈 결과는 원문 확인이 필요한 지점입니다.
-- 운영 DB 접속정보, 실제 업무 소스, 로컬 설정·캐시와 분석 결과는 로컬에서 관리합니다.
-
-## 개발 검증
+개발 검증은 합성 C#·WinForms·SQL fixture를 사용하며 운영 DB에 접속하지 않습니다.
 
 ```powershell
 dotnet restore SourceTrail.sln
-dotnet restore tests/Fixtures/Demo/Demo.sln
-dotnet restore tests/Fixtures/Broken/Broken.sln
-dotnet test SourceTrail.sln --no-restore
+dotnet test tests/SourceTrail.Tests/SourceTrail.Tests.csproj -c Release --no-restore
 ```
-
-가상 WinForms와 오류가 있는 프로젝트로 화면 검색, 정적 호출, SQL 파일 분석, 부분 로딩 및 갱신을 검증합니다.

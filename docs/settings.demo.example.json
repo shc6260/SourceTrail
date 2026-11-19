@@ -10,6 +10,6 @@
     ]
   },
   "Database": {
-    "ConnectionString": ""
+    "Mode": "SqlFiles"
   }
 }

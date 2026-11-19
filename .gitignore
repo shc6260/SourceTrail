@@ -20,3 +20,9 @@ artifacts/
 cache/
 **/sql-*.json
 **/sql-*.json.*.tmp
+
+# Optional project-local source/prepared caches (defaults live in LocalAppData).
+.sourcetrail-code-cache/
+.sourcetrail-sql-cache/
+.sourcetrail-prepared-index/
+prepared-index/
