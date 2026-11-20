@@ -4,7 +4,7 @@ C# WinForms의 화면·이벤트에서 서비스와 DB 호출 위치를 찾고, 
 
 C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지 않습니다. DB는 `SqlFiles`만 지원하고 SQL Server에 접속하지 않습니다. 검색은 원본을 읽고, 색인 준비·갱신은 로컬 캐시만 저장합니다. 반환된 이름·Adapter 매핑은 정적 후보이므로 실제 연결과 조건은 원문으로 확인합니다.
 
-- [Codex 설치 프롬프트](#codex에-설치-맡기기)
+- [설치 프롬프트](#ai-도구에-설치-맡기기)
 - [기존 설치 업데이트](#기존-설치-업데이트)
 - [프로젝트에 사용 지침 적용](#프로젝트에-사용-지침-적용)
 - [실행·검색 순서](#실행검색-순서)
@@ -13,12 +13,12 @@ C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지
 - [상세 사용 지침·프로젝트 지침 연결](docs/usage-guidelines.md)
 - [성능 측정의 범위](#성능-측정의-범위)
 
-## Codex에 설치 맡기기
+## AI 도구에 설치 맡기기
 
-아래 프롬프트를 Windows의 Codex에 붙여넣으세요. 소스와 SQL 경로는 자신의 경로로 채웁니다. 비워 두면 설치 에이전트가 확인하도록 되어 있습니다. `.sln` 없이 소스 폴더를 지정해도 됩니다.
+아래 프롬프트를 Windows의 Codex 또는 Claude Code에 붙여넣으세요. SourceTrail은 로컬 stdio MCP를 지원하는 클라이언트에서 사용할 수 있습니다. 소스와 SQL 경로는 자신의 경로로 채웁니다. 비워 두면 설치 에이전트가 확인하도록 되어 있습니다. `.sln` 없이 소스 폴더를 지정해도 됩니다.
 
 ```text
-이 Windows PC에 SourceTrail MCP 2.0을 설치하고 현재 Codex에 등록해줘.
+이 Windows PC에 SourceTrail MCP를 설치하고 현재 사용 중인 MCP 클라이언트에 등록해줘.
 저장소: https://github.com/shc6260/SourceTrail
 설명에서 멈추지 말고, 확인된 경로와 아래 절차로 설치를 진행해줘.
 
@@ -37,7 +37,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
    실행에는 publish 폴더 전체를 보관한다. 분석 대상 프로젝트의 컴파일·빌드는 하지 않는다.
 4. 일괄 색인 저장소를 정한다. 기본은 실제 MCP 실행 사용자의
    %LOCALAPPDATA%\SourceTrail\prepared-index이며 실제 절대 경로로 확정한다.
-   기존에 지정한 저장소가 있으면 유지한다. Codex 프로젝트 폴더에 임의로 만들지 않는다.
+   기존에 지정한 저장소가 있으면 유지한다. 클라이언트의 프로젝트 폴더에 임의로 만들지 않는다.
 5. 최초 일괄 색인을 생성한다.
    dotnet <실행 DLL 절대 경로> prepare-index --source <확인한 C# 경로>
      --sql-folder <확인한 SQL 폴더> --index-directory <확정한 색인 저장소>
@@ -47,13 +47,16 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
    기존 색인을 먼저 지우지 않는다. 종료 코드 0과 Published=true를 확인한다.
    생성·재사용 건수, 구문 진단·SQL 경고, 단계별 시간을 기록한다.
    실패하면 설치 완료로 보고하지 않는다.
-6. docs/codex-registration.md에 따라 sourcetrail을 로컬 stdio MCP 서버로 등록한다.
+6. docs/mcp-registration.md에서 현재 클라이언트의 절차에 따라
+   sourcetrail을 로컬 stdio MCP 서버로 등록한다. 다른 클라이언트 설정은 변경하지 않는다.
    command는 dotnet, args는 publish한 SourceTrail.Mcp.dll의 절대 경로로 지정한다.
    Analysis__SolutionPath, Database__SqlFolder는 준비에 사용한 경로와 같게 설정한다.
    Database__Mode=SqlFiles, Indexing__Directory는 4~5번과 같은 절대 경로를 사용한다.
    신규 설치 권장값은 Analysis__WatchCodeFiles=true,
    Analysis__CodeRescanIntervalSeconds=30이다. 사용자가 명시한 기존 설정은 유지한다.
-   연결 대기 30초·도구 대기 300초를 신규 기본값으로 사용하고 기존 값은 유지한다.
+   연결 대기 30초·도구 대기 300초를 신규 권장값으로 사용하고 기존 값은 유지한다.
+   대기 시간은 클라이언트별 지원 방식으로 설정한다. Codex 전용 설정 키를
+   다른 클라이언트에 복사하지 않는다. 지원 여부를 확인하지 못하면 확인 필요로 남긴다.
    다른 MCP 등록을 변경하지 않고 sourcetrail을 중복 등록하지 않는다.
 7. MCP를 새로 연결하고 ping의 pong을 확인한다.
    설정된 소스에서 실제로 확인한 식별자로 선언 검색을 한 번 수행하고,
@@ -65,7 +68,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 설치 결과를 표로 정리해줘:
 - 저장소·실행 DLL 위치
-- Codex 설정 파일과 MCP 실행 명령
+- 사용한 MCP 클라이언트·설정 파일·등록 범위와 MCP 실행 명령
 - C#·SQL 분석 대상
 - 일괄 색인 저장소, 활성 세대, 생성·재사용 건수와 주요 경고
 - 변경 감지 설정과 연결·호출 대기 시간
@@ -88,7 +91,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 | 텍스트 검색 | `Analysis.UseRipgrep=true` 기본. PATH의 `rg.exe`/`rg` 또는 `Analysis.RipgrepPath` 사용. 없거나 실패하면 기존 .NET 검색으로 대체 |
 | 연결·도구 대기 | 신규 설치 권장 30초·300초 |
 
-일괄 색인은 Codex 프로젝트 폴더와 별개입니다. **어떤 Codex 프로젝트를 열었는지가 아니라 MCP에 설정된 소스·SQL 경로를 따릅니다.** 저장소 하나에는 활성 세대 하나가 있고, 소스·SQL 경로가 모두 일치할 때 해당 세대의 캐시를 사용합니다. 여러 분석 대상을 각각 유지하려면 저장소와 MCP 설정을 분리하세요. Codex 프로젝트별 자동 분리 기능은 없습니다.
+일괄 색인은 MCP 클라이언트의 프로젝트 폴더와 별개입니다. **어떤 클라이언트 프로젝트를 열었는지가 아니라 MCP에 설정된 소스·SQL 경로를 따릅니다.** 저장소 하나에는 활성 세대 하나가 있고, 소스·SQL 경로가 모두 일치할 때 해당 세대의 캐시를 사용합니다. 여러 분석 대상을 각각 유지하려면 저장소와 MCP 설정을 분리하세요. 클라이언트 프로젝트별 자동 분리 기능은 없습니다.
 
 설정은 실행 DLL 옆 `appsettings.json` 또는 MCP 환경변수로 지정합니다. 환경변수가 JSON보다 우선합니다. `Indexing.Directory`를 생략하면 기본 저장소를 사용하며, 별도 경로를 지정하면 준비 명령과 MCP 설정을 동일하게 맞춰야 합니다. 활성 세대가 일치하면 그 안의 C#·SQL 캐시가 개별 캐시 경로보다 우선합니다.
 
@@ -137,7 +140,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 ## 프로젝트에 사용 지침 적용
 
-설치 후 **실제로 분석할 프로젝트**의 `AGENTS.md` 또는 기존 검색 지침에 아래 내용을 추가하세요. 이미 공통 지침을 참조한다면 그 공통 문서에 한 번만 추가하면 됩니다.
+설치 후 **실제로 분석할 프로젝트**의 지침에 아래 내용을 추가하세요. Codex는 `AGENTS.md`, Claude Code는 `CLAUDE.md`, 다른 클라이언트는 해당 도구가 읽는 프로젝트 지침을 사용합니다. 이미 공통 지침을 참조한다면 그 공통 문서에 한 번만 추가하면 됩니다.
 
 아래 `D:/Tools/SourceTrail`은 예시입니다. 설치한 SourceTrail 저장소의 실제 절대 경로로 바꾸세요. MCP 등록만으로 이 MD가 자동 적용되지는 않습니다.
 
@@ -325,7 +328,7 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 선언·참조·DB 명령은 파일·구문 기반 후보입니다. 오버로드·수신 타입·런타임 분기·실제 endpoint와 DB 배포를 자동으로 확정하지 않습니다. `Ready`는 색인/검색 준비 상태이며 컴파일 성공이 아닙니다. 전체 그래프·자동 WCF 연결·LiveDatabase는 2.0에서 제거했습니다.
 
 - [도구와 반환 의미](docs/tools.md)
-- [설정·Codex 등록](docs/codex-registration.md)
+- [MCP 등록·설정 — Codex / Claude Code](docs/mcp-registration.md)
 - [일괄 색인 상세](docs/index-preparation.md)
 - [구조와 캐시](docs/architecture.md)
 - [2.0.1 변경과 검증 결과](docs/performance-results.md)

@@ -2,7 +2,7 @@
 
 # 로컬 SQL 폴더와 색인
 
-DB 검색에는 로컬에 저장된 SQL 스크립트를 사용합니다. [Codex 등록 설정](codex-registration.md)에서 `SqlFiles`와 폴더를 지정하거나, 현재 세션에서 `select_database_source`에 아래 입력을 전달하세요.
+DB 검색에는 로컬에 저장된 SQL 스크립트를 사용합니다. [MCP 등록 설정](mcp-registration.md)에서 `SqlFiles`와 폴더를 지정하거나, 현재 세션에서 `select_database_source`에 아래 입력을 전달하세요.
 
 ## SQL 폴더
 
