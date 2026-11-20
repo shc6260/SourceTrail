@@ -57,6 +57,8 @@ public sealed class AnalysisOptions
     public bool WatchCodeFiles { get; set; }
     public int CodeRescanIntervalSeconds { get; set; } = 30;
     public string[] AdditionalSearchRoots { get; set; } = [];
+    public bool UseRipgrep { get; set; } = true;
+    public string RipgrepPath { get; set; } = "";
     public int MaxResults { get; set; } = 20;
     public ProcedureCallRule[] ProcedureCallRules { get; set; } = [];
 }

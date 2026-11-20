@@ -33,6 +33,8 @@ Database__SqlFolder = 'D:\Projects\Sample\DatabaseScripts'
 | `Database__CacheDirectory`, `Database__WatchFiles` | SQL 캐시 경로와 변경 감지. 기본 경로와 갱신 조건은 [SQL 자료와 캐시](sql-sources.md) 참고 |
 | `Analysis__MaxResults` | 검색 기본 반환 건수. 기본 20, 페이지로 추가 조회 |
 | `Analysis__AdditionalSearchRoots__0` | 기본 솔루션 외 추가 텍스트 검색 경로 |
+| `Analysis__UseRipgrep` | 텍스트 검색에 ripgrep 후보 파일 검색 사용. 기본 `true`; `false`는 기존 .NET 검색. rg가 없거나 실행에 실패하면 기존 검색으로 대체 |
+| `Analysis__RipgrepPath` | 선택적 `rg.exe`/`rg` 절대 경로. 비워 두면 PATH에서 찾으며 Windows는 `rg.exe` 사용. 코드·SQL 경로나 색인 경로와 별개 |
 | `Analysis__ProcedureCallRules__0__TypeName`, `Analysis__ProcedureCallRules__0__MethodName`, `Analysis__ProcedureCallRules__0__ArgumentIndex` | DB 래퍼 규칙의 타입 힌트(의미 바인딩하지 않음), 메서드명, 0부터 시작하는 인자 위치. [JSON 설정 예제](settings.demo.example.json) 참고 |
 
 DB 검색에 사용할 자료는 `.sql` 파일이 들어 있는 로컬 폴더입니다. `Database__Mode`를 `SqlFiles`로 명시하고 폴더 경로를 지정하세요. 이 설정에는 DB 연결 문자열이 필요 없습니다.

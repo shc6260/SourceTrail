@@ -30,6 +30,8 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 2. 기존 SourceTrail 등록과 체크아웃을 확인한다. 없으면 사용자 폴더에 저장소를 복제한다.
    기존 변경사항은 덮어쓰지 않는다. Git과 .NET 10 SDK가 없으면 공식 배포본으로 설치하고
    권한 승인이 필요한 경우에만 알린다.
+   rg.exe/rg가 있으면 실제 실행 경로를 확인한다. 없으면 기존 .NET 텍스트 검색으로
+   동작하므로 설치 실패로 처리하지 않고 검색 엔진 상태를 결과에 알린다.
 3. 저장소에서 아래 명령으로 publish하고 실행 DLL의 절대 경로를 확인한다.
    dotnet publish src/SourceTrail.Mcp/SourceTrail.Mcp.csproj -c Release -o artifacts/server
    실행에는 publish 폴더 전체를 보관한다. 분석 대상 프로젝트의 컴파일·빌드는 하지 않는다.
@@ -83,6 +85,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 | 활성 세대가 없을 때 C# 캐시 | `Analysis.CodeCacheDirectory`. 빈 값이면 C# 디스크 재사용 비활성화 |
 | 활성 세대가 없을 때 SQL 캐시 | `%LOCALAPPDATA%\SourceTrail\cache` |
 | 변경 확인 | 설치 프롬프트·배포 예제는 `WatchCodeFiles=true`, 30초 주기. 설정 생략 시 라이브러리 기본은 `false` |
+| 텍스트 검색 | `Analysis.UseRipgrep=true` 기본. PATH의 `rg.exe`/`rg` 또는 `Analysis.RipgrepPath` 사용. 없거나 실패하면 기존 .NET 검색으로 대체 |
 | 연결·도구 대기 | 신규 설치 권장 30초·300초 |
 
 일괄 색인은 Codex 프로젝트 폴더와 별개입니다. **어떤 Codex 프로젝트를 열었는지가 아니라 MCP에 설정된 소스·SQL 경로를 따릅니다.** 저장소 하나에는 활성 세대 하나가 있고, 소스·SQL 경로가 모두 일치할 때 해당 세대의 캐시를 사용합니다. 여러 분석 대상을 각각 유지하려면 저장소와 MCP 설정을 분리하세요. Codex 프로젝트별 자동 분리 기능은 없습니다.
