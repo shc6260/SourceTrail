@@ -56,24 +56,45 @@ public sealed partial class RoslynAnalyzer
                     variable?.Initializer?.Value is ObjectCreationExpressionSyntax newAdapter ? newAdapter.Type.ToString() :
                     (variable?.Parent as VariableDeclarationSyntax)?.Type.ToString();
                 if (type is null || !type.EndsWith("Adapter", StringComparison.Ordinal)) continue;
-                var stem = Regex.Replace(SimpleType(type), "(Table)?Adapter$", "");
+                var adapterType = SimpleType(type);
+                var stem = Regex.Replace(adapterType, "(Table)?Adapter$", "");
                 bool foundAdapter = false;
-                foreach (var adapter in _sourceFiles.Where(source => source.Symbols.Any(s => s.Name == SimpleType(type) && s.SymbolKind == "Class") ||
-                    stem.Length >= 3 && Path.GetFileName(source.File).Contains(stem, StringComparison.OrdinalIgnoreCase)))
+                var searched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                async Task ReadAdapterAsync(SourceFile adapter)
                 {
+                    if (!searched.Add(adapter.File)) return;
                     var text = await File.ReadAllTextAsync(adapter.File, token);
-                    if (!text.Contains("CommandText", StringComparison.Ordinal) || !text.Contains(SimpleType(type), StringComparison.Ordinal)) continue;
+                    if (!text.Contains("CommandText", StringComparison.Ordinal) || !text.Contains(adapterType, StringComparison.Ordinal)) return;
                     var adapterRoot = await RootAsync(adapter, token);
                     foreach (var assignment in adapterRoot.DescendantNodes().OfType<AssignmentExpressionSyntax>().Where(node =>
-                        SimpleName(node.Left) == "CommandText" && node.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText == SimpleType(type)))
+                        SimpleName(node.Left) == "CommandText" && node.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText == adapterType))
                     {
                         string left = assignment.Left.ToString();
                         var operation = left.Contains("DeleteCommand") ? "Deleted" : left.Contains("InsertCommand") ? "Added" : left.Contains("UpdateCommand") ? "Modified" : null;
                         if (operation is null) continue;
                         foundAdapter = true;
-                        foreach (var procedure in LiteralNames(assignment.Right, null))
-                            calls.Add(new("AdapterCommandCandidate", [procedure], "Update", new(SimpleType(type), adapter.File, Line(assignment)),
+                        var procedures = LiteralNames(assignment.Right, null);
+                        foreach (var procedure in procedures)
+                            calls.Add(new("AdapterCommandCandidate", [procedure], "Update", new(adapterType, adapter.File, Line(assignment)),
                                 $"Named adapter {type} configures {operation} rows. Verify adapter identity, inheritance and the row-state subset supplied at {file.File}:{Line(call)}."));
+                        // Designer-generated adapters often carry inline SQL instead of a procedure name.
+                        if (procedures.Length == 0 && SqlStatementTarget(assignment.Right) is { } statement)
+                            calls.Add(new("AdapterSqlCandidate", [statement], "Update", new(adapterType, adapter.File, Line(assignment)),
+                                $"Named adapter {type} configures inline SQL for {operation} rows (no stored procedure). Verify adapter identity and the row-state subset supplied at {file.File}:{Line(call)}."));
+                    }
+                }
+                foreach (var adapter in _sourceFiles.Where(source => source.Symbols.Any(s => s.Name == adapterType && s.SymbolKind == "Class") ||
+                    stem.Length >= 3 && Path.GetFileName(source.File).Contains(stem, StringComparison.OrdinalIgnoreCase)).ToArray())
+                    await ReadAdapterAsync(adapter);
+                // Generated adapters share one DataSet Designer file whose name rarely contains the adapter's stem
+                // (InfoResultImageTableAdapter lives in DSInfoResult.Designer.cs). Fall back to a text search for the class.
+                if (!foundAdapter)
+                {
+                    var candidates = await SourceCandidatesAsync("class " + adapterType, token);
+                    foreach (var adapter in _sourceFiles.Where(source => !searched.Contains(source.File) && !candidates.Skip(source.File)).ToArray())
+                    {
+                        var text = await File.ReadAllTextAsync(adapter.File, token);
+                        if (Regex.IsMatch(text, @"\bclass\s+" + Regex.Escape(adapterType) + @"\b")) await ReadAdapterAsync(adapter);
                     }
                 }
                 if (!foundAdapter) unresolved.Add(Site(call));
@@ -86,6 +107,19 @@ public sealed partial class RoslynAnalyzer
         finally { _gate.Release(); }
     }
     private static string SimpleType(string name) => name.Split('.').Last();
+    private static readonly Regex SqlStatement = new(@"^\s*(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(\[?\w+\]?(?:\.\[?\w+\]?)?)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // "INSERT INTO [InfoTestResultImage] ..." → "INSERT INTO InfoTestResultImage". Reads the leading literal of a
+    // concatenation, which is how the Designer splits long SQL.
+    private static string? SqlStatementTarget(ExpressionSyntax expression)
+    {
+        while (expression is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } concat) expression = concat.Left;
+        if (expression is not LiteralExpressionSyntax literal || !literal.IsKind(SyntaxKind.StringLiteralExpression)) return null;
+        var match = SqlStatement.Match(literal.Token.ValueText);
+        return match.Success
+            ? Regex.Replace(match.Groups[1].Value, @"\s+", " ").ToUpperInvariant() + " " + match.Groups[2].Value.Replace("[", "").Replace("]", "")
+            : null;
+    }
     private static string[] LiteralNames(ExpressionSyntax? expression, MethodDeclarationSyntax? method)
     {
         IEnumerable<string> values = expression switch

@@ -1,4 +1,4 @@
-# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.1.0
+# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.2.0
 
 C# WinForms의 화면·이벤트에서 서비스와 DB 호출 위치를 찾고, 로컬 SQL 파일에서 프로시저 정의와 직접 참조를 확인하는 MCP 서버입니다. 파일·줄 번호를 근거로 **MCP로 위치 찾기 → 원문에서 실제 이름 확인 → 그 이름으로 MCP 재검색** 순서로 사용합니다.
 

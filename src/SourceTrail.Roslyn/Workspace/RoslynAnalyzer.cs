@@ -130,29 +130,101 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
             var hints = parts.TakeLast(2).Select(value => value.Split('<')[0]).Where(value => value.Length >= 3).ToArray();
             var preferred = parts.Length > 1 ? _sourceFiles.Where(file => hints.Any(hint => Path.GetFileName(file.File).Split('.')[0].Equals(hint, StringComparison.OrdinalIgnoreCase))).ToArray() : [];
             var leaf = parts.Last();
-            async Task ParseCandidates(IEnumerable<SourceFile> files)
-            {
-                foreach (var file in files)
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (file.Hash.Length == 0 && !(await File.ReadAllTextAsync(file.File, token)).Contains(leaf, StringComparison.OrdinalIgnoreCase)) continue;
-                    await EnsureParsedAsync(file.File, token, updateSymbols: false);
-                }
-                RefreshIndexedSymbols();
-            }
-            await ParseCandidates(preferred);
+            await ParseFilesContainingAsync(preferred, leaf, token);
             bool prioritized = preferred.Length > 0 && _indexedSymbols.Any(symbol => preferred.Any(file => file.File == symbol.File) && Matches(symbol, query));
-            if (!prioritized) await ParseCandidates(_sourceFiles);
+            if (!prioritized) await ParseFilesContainingAsync(_sourceFiles, leaf, token);
             var paths = prioritized ? preferred.Select(file => file.File).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
             var matches = _indexedSymbols.Where(symbol => (paths is null || paths.Contains(symbol.File!)) && Matches(symbol, query))
                 .OrderByDescending(symbol => symbol.Name.Equals(query, StringComparison.OrdinalIgnoreCase) || symbol.FullName == query).ThenBy(symbol => symbol.FullName).ThenBy(symbol => symbol.File).ToArray();
+            var warnings = new List<string>();
+            if (prioritized) warnings.Add("Filename-prioritized declaration candidates; other files may contain additional matches. Use scoped text/reference search when exhaustive coverage is required.");
+            // A name such as Set_InfoResult also prefixes Set_InfoResultImage, Set_InfoResultTestStatus, ...
+            // When the exact name exists, return only it and report how many substring matches were left out.
+            var exact = matches.Where(symbol => IsExactMatch(symbol, query)).ToArray();
+            if (exact.Length > 0 && exact.Length < matches.Length)
+            {
+                warnings.Add($"Exact-name declarations only; {matches.Length - exact.Length} substring matches omitted. Query a longer or different name to see them.");
+                matches = exact;
+            }
+            if (matches.Length == 0 && parts.Length > 1 && leaf.Length > 0)
+            {
+                var (inherited, chain) = await InheritedMembersAsync(parts[^2].Split('<')[0], leaf, token);
+                if (inherited.Length > 0)
+                {
+                    matches = inherited;
+                    warnings.Add($"No member '{leaf}' is declared on {parts[^2]}; showing members declared on base types ({string.Join(" → ", chain)}). Base lists are read from syntax and not bound; verify in source.");
+                }
+            }
             await PersistParsedAsync(token);
             var result = Paginate(matches, offset, limit);
-            return prioritized ? result with { Warnings = result.Warnings.Concat(["Filename-prioritized declaration candidates; other files may contain additional matches. Use scoped text/reference search when exhaustive coverage is required."]).ToArray() } : result;
+            return warnings.Count == 0 ? result : result with { Warnings = result.Warnings.Concat(warnings).ToArray() };
         }
         finally { _gate.Release(); }
     }
     private static bool Matches(SymbolInfo symbol, string query) => symbol.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || symbol.FullName.Contains(query, StringComparison.OrdinalIgnoreCase);
+    // "Save", "Repository.Save", "Repository.Save(" match every overload; "Repository.Save()" matches only that one.
+    private static bool IsExactMatch(SymbolInfo symbol, string query)
+    {
+        if (query.EndsWith(')'))
+            return symbol.FullName.Equals(query, StringComparison.OrdinalIgnoreCase) ||
+                symbol.FullName.EndsWith("." + query, StringComparison.OrdinalIgnoreCase);
+        var name = query.Split('(')[0].TrimEnd('.');
+        var declared = symbol.FullName.Split('(')[0];
+        return !name.Contains('.') ? symbol.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+            : declared.Equals(name, StringComparison.OrdinalIgnoreCase) || declared.EndsWith("." + name, StringComparison.OrdinalIgnoreCase);
+    }
+    private async Task ParseFilesContainingAsync(IEnumerable<SourceFile> files, string text, CancellationToken token)
+    {
+        var list = files.ToArray();
+        // ripgrep only narrows a whole-catalog scan; the managed read below still decides.
+        var candidates = list.Length > 64 ? await SourceCandidatesAsync(text, token) : SourceCandidates.All;
+        foreach (var file in list)
+        {
+            token.ThrowIfCancellationRequested();
+            if (file.Hash.Length == 0 && candidates.Skip(file.File)) continue;
+            if (file.Hash.Length == 0 && !(await File.ReadAllTextAsync(file.File, token)).Contains(text, StringComparison.OrdinalIgnoreCase)) continue;
+            await EnsureParsedAsync(file.File, token, updateSymbols: false);
+        }
+        RefreshIndexedSymbols();
+    }
+    // Walks base lists written in source (at most four levels) to find a member declared on a base type.
+    private async Task<(SymbolInfo[] Members, string[] Chain)> InheritedMembersAsync(string typeName, string member, CancellationToken token)
+    {
+        var chain = new List<string>();
+        var current = new[] { typeName };
+        for (int depth = 0; depth < 4 && current.Length > 0; depth++)
+        {
+            var bases = new List<string>();
+            foreach (var name in current) bases.AddRange(await BaseTypeNamesAsync(name, token));
+            current = bases.Distinct(StringComparer.Ordinal).Where(name => !chain.Contains(name)).ToArray();
+            if (current.Length == 0) break;
+            chain.AddRange(current);
+            await ParseFilesContainingAsync(_sourceFiles, member, token);
+            var members = _indexedSymbols.Where(symbol => symbol.Name.Equals(member, StringComparison.Ordinal) &&
+                symbol.ContainingType is { } owner && current.Contains(SimpleTypeName(owner), StringComparer.Ordinal)).ToArray();
+            if (members.Length > 0) return (members, chain.ToArray());
+        }
+        return ([], chain.ToArray());
+    }
+    private async Task<string[]> BaseTypeNamesAsync(string typeName, CancellationToken token)
+    {
+        await ParseFilesContainingAsync(_sourceFiles, typeName, token);
+        var names = new List<string>();
+        foreach (var declaration in _indexedSymbols.Where(symbol => symbol.Name == typeName &&
+            symbol.SymbolKind is "Class" or "Struct" or "Interface" or "Record").ToArray())
+            names.AddRange(await BaseListAsync(declaration, token));
+        return names.Distinct(StringComparer.Ordinal).ToArray();
+    }
+    private async Task<string[]> BaseListAsync(SymbolInfo declaration, CancellationToken token)
+    {
+        var file = _sourceFiles.First(source => source.File == declaration.File);
+        var root = await RootAsync(file, token, updateSymbols: false);
+        return root.DescendantNodes().OfType<BaseTypeDeclarationSyntax>()
+            .Where(type => SourceId(file.File, file.Hash, type.SpanStart) == declaration.Id)
+            .SelectMany(type => type.BaseList?.Types ?? default)
+            .Select(type => SimpleTypeName(type.Type.ToString())).ToArray();
+    }
+    private static string SimpleTypeName(string name) => name.Split('<')[0].Split('.').Last().Replace("global::", "", StringComparison.Ordinal);
     private SymbolInfo Resolve(string query)
     {
         var exact = _indexedSymbols.FirstOrDefault(s => s.Id == query);
@@ -178,10 +250,16 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
                 await PersistParsedAsync(token);
             }
             else { RequireIndex(); var owner = Resolve(symbolOrFile); items = _indexedSymbols.Where(s => s.Id == owner.Id || s.ContainingType == owner.FullName).ToArray(); }
-            return new(items.Where(s => s.SymbolKind is "Class" or "Struct" or "Interface" or "Enum" or "Record").ToArray(),
+            var types = items.Where(s => s.SymbolKind is "Class" or "Struct" or "Interface" or "Enum" or "Record").ToArray();
+            var baseTypes = new List<string>();
+            foreach (var type in types)
+                if (await BaseListAsync(type, token) is { Length: > 0 } bases) baseTypes.Add(type.FullName + " : " + string.Join(", ", bases));
+            return new(types,
                 items.Where(s => s.SymbolKind == "Field").ToArray(), items.Where(s => s.SymbolKind == "Property").ToArray(),
                 items.Where(s => s.SymbolKind == "Method").ToArray(), items.Where(s => s.SymbolKind == "Constructor").ToArray(),
-                items.Where(s => s.SymbolKind == "Event").ToArray(), _state.SnapshotId, Warnings());
+                items.Where(s => s.SymbolKind == "Event").ToArray(), _state.SnapshotId,
+                baseTypes.Count == 0 ? Warnings() : Warnings().Append("Members inherited from BaseTypes are not listed; query find_symbol with 'BaseType.Member' or 'Type.Member'.").ToArray())
+                { BaseTypes = baseTypes.Count == 0 ? null : baseTypes };
         }
         finally { _gate.Release(); }
     }

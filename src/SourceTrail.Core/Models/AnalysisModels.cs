@@ -17,7 +17,12 @@ public sealed record ReferenceInfo(SymbolInfo? ReferencingSymbol, string Project
 public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyList<SymbolInfo> Fields,
     IReadOnlyList<SymbolInfo> Properties, IReadOnlyList<SymbolInfo> Methods,
     IReadOnlyList<SymbolInfo> Constructors, IReadOnlyList<SymbolInfo> Events,
-    string? SnapshotId, IReadOnlyList<string> Warnings);
+    string? SnapshotId, IReadOnlyList<string> Warnings)
+{
+    // "Type : Base1, Base2" as written in source; inherited members are not listed in this overview.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? BaseTypes { get; init; }
+}
 public sealed record TextMatch(string File, int Line, int Column, string Preview);
 public sealed record EventHandlerMatch(string Control, string Event, string Handler, string BindingFile,
     int BindingLine, string? HandlerFile, int? HandlerLine, string? SymbolId);
@@ -25,7 +30,12 @@ public sealed record UiActionEvidence(string Kind, string Text, string File, int
 public sealed record UiActionCandidate(string Screen, string? Title, string Control, string? Caption,
     string Event, string Handler, IReadOnlyList<UiActionEvidence> Evidence);
 public sealed record UiActionSearchResult(string Status, string IndexState, int IndexedScreens,
-    int Total, bool Truncated, IReadOnlyList<UiActionCandidate> Items);
+    int Total, bool Truncated, IReadOnlyList<UiActionCandidate> Items)
+{
+    // Query words that no returned candidate matched; candidates were ranked on the remaining words.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? UnmatchedTerms { get; init; }
+}
 public sealed record ProcedureUsage(string Procedure, string File, int Line,
     SymbolInfo? ContainingSymbol, string RelationType, bool IsVerifiedCall, string Evidence);
 public sealed record ProcedureCallRule(string TypeName, string MethodName, int ArgumentIndex);

@@ -29,10 +29,23 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 - rg가 없거나 실행 오류·30초 대기 제한이 발생하면 기존 검색으로 대체합니다. 사용자 취소는 대체 검색을 시작하지 않습니다. 검색 엔진·대체 여부와 `text.ripgrep`/`text.scan` 구간은 서버 로그에서 확인합니다. 설정은 [MCP 등록 및 설정](mcp-registration.md)을 참고하세요.
 - 전체 이름은 일치하는 파일명을 우선합니다. 범위를 끝까지 검색하지 않은 경우 경고를 반환하며 추가 선언이 없다는 뜻이 아닙니다. 미발견 시 소스 후보 범위를 넓힙니다. 광범위 문자열·이름 참조 검색은 큰 폴더에서 오래 걸릴 수 있습니다.
 - CommandConfiguration은 현재 메서드에서 이름이 설정됐다는 뜻입니다. 미사용 변수·조건 분기·나중 변경을 원문에서 확인합니다.
-- AdapterCommandCandidate는 이름·파일명이 일치하는 Adapter의 행 상태 설정입니다. 실제 타입·상속·전달 행 상태는 확인 필요입니다. 찾지 못한 Adapter는 unresolved로 남깁니다.
+- AdapterCommandCandidate는 이름·파일명이 일치하는 Adapter의 행 상태 설정입니다. 실제 타입·상속·전달 행 상태는 확인 필요입니다. 파일명으로 찾지 못하면 `class <Adapter>` 텍스트 검색으로 Adapter 파일을 찾습니다. 그래도 찾지 못한 Adapter는 unresolved로 남깁니다.
+- AdapterSqlCandidate는 Adapter가 저장 프로시저 대신 SQL문(`INSERT INTO 테이블` 등)을 직접 설정한 경우입니다. 대상에는 명령과 테이블만 적습니다.
+- `find_symbol`은 이름이 정확히 같은 선언이 있으면 그것만 반환하고, 이름 일부만 맞은 선언은 개수만 경고로 알립니다. `타입.멤버`가 0건이면 소스에 적힌 부모 타입을 최대 4단계까지 따라가 찾고 경고로 표시합니다. 부모 타입은 구문으로만 읽으며 실제 바인딩은 확인 필요입니다.
+- `get_symbol_overview`의 baseTypes는 소스에 적힌 부모 타입입니다. 상속받은 멤버는 목록에 없습니다.
+- `find_ui_actions`는 일부 단어가 어느 화면에도 없어도 나머지 단어로 후보를 찾고, 쓰이지 않은 단어를 unmatchedTerms로 돌려줍니다. 동작 단어(저장·수정 등)는 반드시 버튼·핸들러와 맞아야 합니다. 두 글자 이상 한글 단어는 화면 제목·메뉴·버튼 문구의 합성어 안에서도 찾지만(결과 ⊂ 결과입력) 낱말 전체가 맞은 화면보다 뒤에 둡니다.
 - methodCandidates의 다음 호출명을 선택해 선언·원문 검색을 이어갑니다. 자동 재귀 탐색은 하지 않습니다.
 - 후보 목록이 limit에 걸리면 truncated를 확인하고 범위를 좁히거나 한도를 조정합니다.
 - locationsOnly와 includeDefinition을 동시에 사용할 수 없습니다. SQL은 로컬 파일만 읽습니다.
+
+## 3.2 변경
+
+"검사 결과 저장" 조사에서 MCP가 막힌 네 곳을 보완했습니다. 도구 이름·인자는 같고, 응답에 필드가 추가됐습니다.
+
+- `find_ui_actions`: 업무 문장에 화면에 없는 단어가 섞여도 후보를 찾고, 한글 합성어 안의 단어도 찾습니다. 응답에 unmatchedTerms를 추가했습니다. 세 단어 이상일 때는 많은 화면에 나오는 단어와 앞쪽 수식어의 점수를 낮춥니다.
+- `find_symbol`: 이름이 정확히 같은 선언만 우선 반환합니다(`Set_InfoResult` 4,323건 → 68건). 부모 타입에 선언된 멤버를 찾습니다.
+- `get_symbol_overview`: baseTypes를 추가했습니다.
+- `find_database_calls`: 파일명이 다른 DataSet Designer 파일의 Adapter를 찾고, Adapter의 직접 SQL을 AdapterSqlCandidate로 반환합니다.
 
 ## 3.1 변경
 

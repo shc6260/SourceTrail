@@ -47,9 +47,12 @@ public sealed partial class RoslynAnalyzer
         try
         {
             var state = await EnsureUiIndexAsync(cancellationToken);
-            var candidates = RankUiActions(_uiIndex!, terms).ToArray();
+            var matchedTerms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var candidates = RankUiActions(_uiIndex!, terms, matchedTerms).ToArray();
+            var unmatched = candidates.Length == 0 ? [] : terms.Where(term => !matchedTerms.Contains(term)).ToArray();
             return new("StaticCandidates", state, _uiIndex!.Screens.Length, candidates.Length,
-                candidates.Length > limit, candidates.Take(limit).ToArray());
+                candidates.Length > limit, candidates.Take(limit).ToArray())
+                { UnmatchedTerms = unmatched.Length == 0 ? null : unmatched };
         }
         finally { _gate.Release(); }
     }
@@ -243,7 +246,7 @@ public sealed partial class RoslynAnalyzer
                 caption with { Kind = "MenuCaption" }, Evidence("ScreenCreation", creation.Type.ToString(), creation.GetLocation())));
     }
 
-    private static IEnumerable<UiActionCandidate> RankUiActions(UiIndex index, string[] terms)
+    private static IEnumerable<UiActionCandidate> RankUiActions(UiIndex index, string[] terms, HashSet<string> matchedTerms)
     {
         var byQualified = index.Screens.ToLookup(screen => screen.QualifiedType, StringComparer.Ordinal);
         var bySimple = index.Screens.ToLookup(screen => screen.Type, StringComparer.Ordinal);
@@ -255,38 +258,77 @@ public sealed partial class RoslynAnalyzer
             return (Menu: menu, Screen: exact.Length == 1 ? exact[0] : exact.Length == 0 && simple.Length == 1 ? simple[0] : null);
         }).Where(item => item.Screen is not null).ToLookup(item => item.Screen!.QualifiedType, item => item.Menu);
 
-        var ranked = new List<(int Score, UiActionCandidate Candidate)>();
-        foreach (var screen in index.Screens)
+        var screens = index.Screens.Select(screen =>
         {
             var screenMenus = menus[screen.QualifiedType].ToArray();
             var screenTerms = terms.Select(term =>
             {
                 var menu = screenMenus.FirstOrDefault(item => Matches(item.Caption.Text, term, aliases: false));
-                int score = menu is not null ? 20 : Matches(screen.Title?.Text, term, aliases: false) ? 11
+                var partialMenu = menu is null ? screenMenus.FirstOrDefault(item => ContainsKoreanTerm(item.Caption.Text, term)) : null;
+                int score = menu is not null ? 20 : partialMenu is not null ? 14
+                    : Matches(screen.Title?.Text, term, aliases: false) ? 11
+                    : ContainsKoreanTerm(screen.Title?.Text, term) ? 8
                     : Matches(screen.Type, term, aliases: false) ? 7 : 0;
-                return (Term: term, Menu: menu, Score: score);
+                return (Term: term, Menu: menu ?? partialMenu, Score: score, Partial: score is 14 or 8);
             }).ToArray();
+            return (Screen: screen, Terms: screenTerms);
+        }).ToArray();
+        // A word that names many screens ("검사" in a checkup system) says little about which screen is meant.
+        // With three or more words, candidates can match different word subsets, so scale a common word's
+        // screen score down by how many screens it matches; a matched word keeps at least 1 point.
+        // One- and two-word queries keep their scores: every candidate there matches the same words.
+        var screenFrequency = terms.ToDictionary(term => term,
+            term => screens.Count(item => item.Terms.Any(match => match.Term == term && match.Score > 0)), StringComparer.OrdinalIgnoreCase);
+        const int CommonScreenWord = 12;
+        // Exact screen-word evidence always ranks above in-compound (partial) evidence, so the partial
+        // match added for "결과입력" never pushes a whole-word "접수" screen down.
+        var ranked = new List<(bool ExactScreen, int Score, UiActionCandidate Candidate)>();
+        // In a Korean noun phrase the last noun is the head ("검사 결과" is a kind of 결과). With three or more
+        // words, a screen word written before the head counts half, so "결과입력" outranks "검사옵션".
+        var nouns = terms.Where(term => !UiActionAliases.Any(group => group.Contains(term, StringComparer.OrdinalIgnoreCase))).ToArray();
+        var head = nouns.Length > 1 ? nouns[^1] : null;
+        foreach (var (screen, unscaled) in screens)
+        {
+            int Scale(string term, int score)
+            {
+                double rarity = screenFrequency[term] <= CommonScreenWord ? 1.0 : (double)CommonScreenWord / screenFrequency[term];
+                double role = head is null || term == head || !nouns.Contains(term) ? 1.0 : 0.5;
+                return Math.Max(1, (int)Math.Round(score * rarity * role));
+            }
+            var screenTerms = unscaled.Select(item => terms.Length < 3 || item.Score == 0 ? item
+                : item with { Score = Scale(item.Term, item.Score) }).ToArray();
             if (terms.Length > 1 && screenTerms.All(term => term.Score == 0)) continue;
             foreach (var control in screen.Controls)
             {
-                int score = 0;
-                bool screenMatched = false, actionMatched = false;
+                int score = 0, unmatched = 0;
+                bool screenMatched = false, actionMatched = false, exactScreen = false;
                 UiMenu? matchedMenu = null;
                 UiActionEvidence? matchedCall = null;
-                foreach (var (term, menu, screenScore) in screenTerms)
+                var matchedHere = new List<string>();
+                foreach (var (term, menu, screenScore, partial) in screenTerms)
                 {
                     var call = control.Calls.FirstOrDefault(item => Matches(item.Text, term, aliases: true));
                     int actionScore = Matches(control.Caption?.Text, term, aliases: false) ? 15
                         : Matches(control.Name, term, aliases: true) ? 12
+                        : ContainsKoreanTerm(control.Caption?.Text, term) ? 10
                         : Matches(control.Handler, term, aliases: true) ? 9 : call is not null ? 6 : 0;
-                    if (screenScore == 0 && actionScore == 0) { score = 0; break; }
+                    // A task phrase can carry words that no screen uses (e.g. "검사" in "검사 결과 저장").
+                    // Rank on the words that matched instead of discarding the candidate.
+                    // The requested action ("저장", "save", ...) must be the control's action, not just a word nearby.
+                    if (actionScore == 0 && UiActionAliases.Any(group => group.Contains(term, StringComparer.OrdinalIgnoreCase)))
+                    { score = 0; break; }
+                    if (screenScore == 0 && actionScore == 0) { unmatched++; continue; }
+                    matchedHere.Add(term);
                     screenMatched |= screenScore > 0;
+                    exactScreen |= screenScore > 0 && !partial;
                     actionMatched |= actionScore > 0;
                     matchedMenu ??= menu;
                     matchedCall ??= call;
                     score += Math.Max(screenScore, actionScore);
                 }
                 if (score == 0 || terms.Length > 1 && !(screenMatched && actionMatched)) continue;
+                score -= 9 * unmatched;
+                matchedTerms.UnionWith(matchedHere);
                 if (control.Event is "Click" or "ItemClick" or "ButtonClick") score += 2;
                 var operationWords = Words(control.Name).Concat(Words(control.Handler))
                     .Where(word => UiActionAliases.Any(group => group.Contains(word))).Distinct().ToArray();
@@ -303,11 +345,11 @@ public sealed partial class RoslynAnalyzer
                     Matches(call.Text, word, aliases: true)));
                 var evidence = new[] { matchedMenu?.Caption, matchedMenu?.Creation, screen.Title, control.Caption,
                     control.Binding, control.HandlerSite, matchedCall }.OfType<UiActionEvidence>().ToArray();
-                ranked.Add((score, new(screen.QualifiedType, screen.Title?.Text, control.Name, control.Caption?.Text,
+                ranked.Add((exactScreen, score, new(screen.QualifiedType, screen.Title?.Text, control.Name, control.Caption?.Text,
                     control.Event, control.Handler, evidence)));
             }
         }
-        return ranked.OrderByDescending(item => item.Score)
+        return ranked.OrderByDescending(item => item.ExactScreen).ThenByDescending(item => item.Score)
             .ThenBy(item => item.Candidate.Screen, StringComparer.Ordinal)
             .ThenBy(item => item.Candidate.Control, StringComparer.Ordinal).Select(item => item.Candidate);
     }
@@ -320,6 +362,12 @@ public sealed partial class RoslynAnalyzer
         return aliases && UiActionAliases.Any(group => group.Contains(term, StringComparer.OrdinalIgnoreCase) &&
             group.Intersect(words, StringComparer.OrdinalIgnoreCase).Any());
     }
+
+    // Korean captions are often written as one compound ("결과입력", "검사결과저장"). Accept a Korean
+    // query word of two or more syllables inside such a compound, ranked below a whole-word match.
+    private static bool ContainsKoreanTerm(string? text, string term) =>
+        text is not null && term.Length >= 2 && term.All(character => character is >= '가' and <= '힣') &&
+        Words(text).Any(word => word.Length > term.Length && word.Contains(term, StringComparison.Ordinal));
 
     private static IEnumerable<string> Words(string text) =>
         UiWords.Matches(text.Normalize(NormalizationForm.FormKC)).Select(match => match.Value.ToLowerInvariant());
