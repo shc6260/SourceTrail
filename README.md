@@ -2,6 +2,66 @@
 
 C# WinForms의 화면·이벤트에서 서비스와 DB 호출 위치를 찾고, 로컬 SQL 파일에서 프로시저 정의와 직접 참조를 확인하는 MCP 서버입니다. 파일·줄 번호를 근거로 **MCP로 위치 찾기 → 원문에서 실제 이름 확인 → 그 이름으로 MCP 재검색** 순서로 사용합니다.
 
+**조사 흐름** — 업무 문장에서 시작해 레거시 구조의 끊기는 구간을 도구와 원문 확인으로 이어 갑니다.
+
+```mermaid
+flowchart TB
+    Q(["업무 문장 · 예: 접수 저장 로직 확인"])
+    subgraph S1["① 화면과 이벤트"]
+        direction LR
+        T1["find_ui_actions<br/>find_event_handlers"] -.->|후보| L1["WinForms 화면 문구<br/>Designer 이벤트 → 핸들러"]
+    end
+    subgraph S2["② 원문 확인"]
+        direction LR
+        T2["핸들러·저장 메서드 원문 읽기"] --> L2["실제 서비스 호출명<br/>WCF 계약"]
+    end
+    subgraph S3["③ 서비스와 서버 구현"]
+        direction LR
+        T3["find_symbol · get_symbol_overview<br/>search_text · find_reference_candidates"] -.->|후보| L3["WCF 프록시<br/>서버 구현 메서드 선언"]
+    end
+    subgraph S4["④ DB 실행 지점"]
+        direction LR
+        T4["find_database_calls<br/>(선택한 메서드 하나)"] -.->|후보| L4["TableAdapter·DB 래퍼 명령<br/>Adapter 매핑"]
+    end
+    subgraph S5["⑤ SQL 정의"]
+        direction LR
+        T5["find_sql_object · analyze_procedure<br/>find_procedure_usage"] --> L5["저장 프로시저 정의<br/>직접 참조 테이블·객체"]
+    end
+    A(["답변 · 파일·줄 근거 + 원문으로 확인하지 못한 구간"])
+    Q --> S1 --> S2 --> S3 --> S4 --> S5 --> A
+```
+
+**실행 구조** — PC에 서버 하나를 두고 모든 클라이언트가 메모리 색인을 함께 씁니다.
+
+```mermaid
+flowchart TB
+    subgraph C["MCP 클라이언트 (대화·도구마다)"]
+        direction LR
+        A1["Claude Code 대화"] --> B1["브리지 --bridge<br/>(stdio, 색인 없음)"]
+        A2["Codex"] --> B2["브리지 --bridge"]
+        A3["stdio 전용 사용<br/>--stdio"]
+    end
+    B1 & B2 -->|"JSON-RPC 중계<br/>30초마다 연결 신호"| K
+    B1 -. "서버가 없으면<br/>작업 자동 등록·실행" .-> TS["작업 스케줄러<br/>SourceTrail MCP"]
+    TS -.-> LN["SourceTrail.Launcher<br/>창 없는 실행기"]
+    LN -.-> K
+    subgraph S["공유 서버 SourceTrail.Mcp --http (PC에 하나, 127.0.0.1만 허용)"]
+        direction LR
+        K["/mcp (stateless HTTP)<br/>실행 게이트: 호출은 한 번에 하나씩"]
+        AS["자동 종료<br/>브리지 없이 10분 지나면 종료"]
+        K --> UI["UI 색인<br/>화면 문구·Designer 바인딩"]
+        K --> CS["C# 구문 색인<br/>선언은 필요할 때만 파싱"]
+        K --> TX["텍스트 검색<br/>ripgrep 후보 → 원문 검증"]
+        K --> SQ["SQL 파일 색인<br/>ScriptDom 정의·직접 참조"]
+    end
+    UI & CS & TX --> SRC[("C# 소스·.sln·csproj<br/>Designer·리소스")]
+    SQ --> SQL[("로컬 SQL 폴더")]
+    UI & CS & SQ <--> CA[("캐시·일괄 색인<br/>변경 파일만 다시 파싱")]
+    W["파일 변경 감지<br/>알림 + 주기적 대조"] -.-> CS & UI
+```
+
+컴파일·MSBuild·DB 접속 없이 원본 파일만 읽습니다. 점선은 후보 또는 필요할 때만 실행되는 경로입니다.
+
 PC에 **서버 하나**를 두고 Claude Code의 여러 대화와 Codex가 같은 프로세스와 메모리 색인을 함께 씁니다. 클라이언트에는 가벼운 **브리지**(`--bridge`)를 등록하면, 클라이언트를 열 때 서버가 켜지고 모든 클라이언트를 닫으면 10분 뒤 서버가 꺼집니다. 서버를 계속 띄워 두고 주소(`http://127.0.0.1:3920/mcp`)로 접속하거나, 클라이언트마다 따로 실행하는 `--stdio`도 사용할 수 있습니다. 2.x의 stdio 등록은 그대로 두면 연결되지 않으므로 [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 확인하세요.
 
 C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지 않습니다. DB는 `SqlFiles`만 지원하고 SQL Server에 접속하지 않습니다. 검색은 원본을 읽고, 색인 준비·갱신은 로컬 캐시만 저장합니다. 반환된 이름·Adapter 매핑은 정적 후보이므로 실제 연결과 조건은 원문으로 확인합니다.
