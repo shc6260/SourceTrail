@@ -1,8 +1,8 @@
-# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.0.0
+# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.1.0
 
 C# WinForms의 화면·이벤트에서 서비스와 DB 호출 위치를 찾고, 로컬 SQL 파일에서 프로시저 정의와 직접 참조를 확인하는 MCP 서버입니다. 파일·줄 번호를 근거로 **MCP로 위치 찾기 → 원문에서 실제 이름 확인 → 그 이름으로 MCP 재검색** 순서로 사용합니다.
 
-3.0부터 **로컬 HTTP 상주 서버가 기본**입니다. PC에 서버를 하나 띄워 두면 Claude Code의 여러 대화와 Codex가 `http://127.0.0.1:3920/mcp`로 같은 프로세스를 공유하고, 색인은 한 번만 메모리에 올립니다. 클라이언트마다 프로세스를 띄우는 stdio는 `--stdio`로 사용할 수 있습니다. 2.x의 stdio 등록은 그대로 두면 연결되지 않으므로 [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 확인하세요.
+PC에 **서버 하나**를 두고 Claude Code의 여러 대화와 Codex가 같은 프로세스와 메모리 색인을 함께 씁니다. 클라이언트에는 가벼운 **브리지**(`--bridge`)를 등록하면, 클라이언트를 열 때 서버가 켜지고 모든 클라이언트를 닫으면 10분 뒤 서버가 꺼집니다. 서버를 계속 띄워 두고 주소(`http://127.0.0.1:3920/mcp`)로 접속하거나, 클라이언트마다 따로 실행하는 `--stdio`도 사용할 수 있습니다. 2.x의 stdio 등록은 그대로 두면 연결되지 않으므로 [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 확인하세요.
 
 C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지 않습니다. DB는 `SqlFiles`만 지원하고 SQL Server에 접속하지 않습니다. 검색은 원본을 읽고, 색인 준비·갱신은 로컬 캐시만 저장합니다. 반환된 이름·Adapter 매핑은 정적 후보이므로 실제 연결과 조건은 원문으로 확인합니다.
 
@@ -50,7 +50,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
    기존 색인을 먼저 지우지 않는다. 종료 코드 0과 Published=true를 확인한다.
    생성·재사용 건수, 구문 진단·SQL 경고, 단계별 시간을 기록한다.
    실패하면 설치 완료로 보고하지 않는다.
-6. docs/http-server.md에 따라 HTTP 상주 서버를 설정하고 시작한다.
+6. README의 "서버 실행과 클라이언트 등록"에 따라 서버를 설정한다.
    publish 폴더의 SourceTrail.Mcp.dll 옆 appsettings.json에 서버 설정을 둔다.
    Analysis.SolutionPath, Database.SqlFolder는 준비에 사용한 경로와 같게 설정한다.
    Database.Mode=SqlFiles, Indexing.Directory는 4~5번과 같은 절대 경로를 사용한다.
@@ -58,15 +58,16 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
    rg 경로를 확인했으면 Analysis.RipgrepPath에 지정한다. 사용자가 명시한 기존 설정은 유지한다.
    Server.Url 기본값 http://127.0.0.1:3920을 사용하고 루프백이 아닌 주소는 쓰지 않는다.
    포트가 이미 사용 중이면 사용자에게 알리고 다른 포트를 정한다.
-   로그인 시 자동 시작 등록(작업 스케줄러)은 사용자에게 확인받은 뒤 진행한다.
-   서버를 시작하고 수신 중인지 확인한다.
+   서버 실행용 작업 스케줄러 작업은 직접 등록하지 않는다. 브리지가 처음 서버를 켤 때
+   현재 사용자 권한으로 'SourceTrail MCP' 작업(트리거 없음, 창 없는 SourceTrail.Launcher.exe 실행)을
+   자동 등록한다. PC 설정에 남는 변경이므로 사용자에게 알린다.
 7. docs/mcp-registration.md에서 현재 클라이언트의 절차에 따라
-   sourcetrail을 HTTP MCP 서버(http://127.0.0.1:3920/mcp)로 등록한다.
+   sourcetrail을 브리지로 등록한다: command는 dotnet, args는 SourceTrail.Mcp.dll 절대 경로와 --bridge.
    서버 설정용 환경변수는 클라이언트 등록에 넣지 않는다. 다른 클라이언트 설정은 변경하지 않는다.
-   연결 대기 30초·도구 대기 300초를 신규 권장값으로 사용하고 기존 값은 유지한다.
+   연결 대기 60초·도구 대기 300초를 신규 권장값으로 사용하고 기존 값은 유지한다.
    대기 시간은 클라이언트별 지원 방식으로 설정한다. Codex 전용 설정 키를
    다른 클라이언트에 복사하지 않는다. 지원 여부를 확인하지 못하면 확인 필요로 남긴다.
-   클라이언트가 HTTP를 지원하지 않으면 args에 --stdio를 붙인 stdio 등록을 사용한다.
+   사용자가 서버를 계속 띄워 두길 원하면 HTTP 주소 등록, 공유 없이 쓰길 원하면 --stdio를 사용한다.
    다른 MCP 등록을 변경하지 않고 sourcetrail을 중복 등록하지 않는다.
 8. MCP를 새로 연결하고 ping의 pong을 확인한다.
    설정된 소스에서 실제로 확인한 식별자로 선언 검색을 한 번 수행하고,
@@ -78,8 +79,8 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 설치 결과를 표로 정리해줘:
 - 저장소·실행 DLL 위치
-- HTTP 서버 주소·서버 설정 파일·자동 시작 여부
-- 사용한 MCP 클라이언트·설정 파일·등록 범위와 등록 주소(stdio면 실행 명령)
+- 서버 주소·서버 설정 파일·서버 실행용 작업 등록 여부
+- 사용한 MCP 클라이언트·설정 파일·등록 범위와 등록 방식(브리지 실행 명령 또는 주소)
 - C#·SQL 분석 대상
 - 일괄 색인 저장소, 활성 세대, 생성·재사용 건수와 주요 경고
 - 변경 감지 설정과 연결·호출 대기 시간
@@ -93,8 +94,8 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 | 항목 | 기본·권장값 |
 |---|---|
-| 실행 방식 | 로컬 HTTP 상주 서버 `http://127.0.0.1:3920/mcp` (`dotnet` + publish된 `SourceTrail.Mcp.dll`). 루프백만 허용. `--stdio`로 클라이언트별 실행 |
-| 서버 설정 | DLL 옆 `appsettings.json`. HTTP에서는 클라이언트 등록에 주소만 적음 |
+| 실행 방식 | 클라이언트는 브리지(`dotnet …SourceTrail.Mcp.dll --bridge`) 등록. 브리지가 공유 서버 `http://127.0.0.1:3920/mcp`를 필요할 때 켜고, 연결된 브리지가 없으면 10분 뒤 서버 종료. 루프백만 허용 |
+| 서버 설정 | DLL 옆 `appsettings.json`. 서버와 브리지가 같은 파일을 읽으며 클라이언트 등록에는 환경변수를 넣지 않음 |
 | 분석 대상 | 확인한 절대 소스 폴더 또는 `.sln`, 로컬 SQL 폴더 |
 | 일괄 색인 | `%LOCALAPPDATA%\SourceTrail\prepared-index` |
 | 활성 세대가 없을 때 C# 캐시 | `Analysis.CodeCacheDirectory`. 빈 값이면 C# 디스크 재사용 비활성화 |
@@ -109,17 +110,23 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 ## 서버 실행과 클라이언트 등록
 
-SourceTrail은 PC에 **서버 하나를 계속 띄워 두고** 여러 클라이언트가 주소로 접속하는 방식이 기본입니다. Claude Code의 여러 대화, Codex, 스크립트 작업자가 같은 프로세스와 메모리 색인을 함께 사용하므로 색인 로딩은 서버가 뜬 뒤 첫 조회 한 번뿐입니다.
+SourceTrail은 PC에 **서버 하나**를 두고 여러 클라이언트가 함께 쓰는 방식입니다. Claude Code의 여러 대화, Codex, 스크립트 작업자가 같은 프로세스와 메모리 색인을 사용하므로 색인 로딩은 서버가 뜬 뒤 첫 조회 한 번뿐입니다. 권장 방식은 **브리지 등록**입니다. 클라이언트를 열면 서버가 켜지고, 모든 클라이언트를 닫으면 잠시 뒤 서버가 꺼집니다.
 
 ```text
-클라이언트 A ─┐
-클라이언트 B ─┼─ http://127.0.0.1:3920/mcp ─→ SourceTrail 서버 1개 (색인 공유)
-클라이언트 C ─┘
+Claude 대화 1 ── 브리지(stdio) ─┐
+Claude 대화 2 ── 브리지(stdio) ─┼─ http://127.0.0.1:3920/mcp ─→ SourceTrail 서버 1개 (색인 공유)
+Codex        ── 브리지(stdio) ─┘
 ```
+
+| 방식 | 클라이언트 등록 | 서버가 켜지는 때 | 서버가 꺼지는 때 |
+|---|---|---|---|
+| **브리지 (권장)** | `dotnet …\SourceTrail.Mcp.dll --bridge` | 브리지를 쓰는 클라이언트를 처음 열 때 | 연결된 브리지가 하나도 없는 상태가 10분 이어지면 |
+| HTTP 상주 | 주소 `http://127.0.0.1:3920/mcp` | 직접 실행하거나 로그인 시 자동 실행 | 직접 끌 때까지 |
+| 단독 stdio | `dotnet …\SourceTrail.Mcp.dll --stdio` | 클라이언트·대화마다 따로 | 그 클라이언트가 끝날 때 (공유 없음) |
 
 ### 1. 서버 설정
 
-publish 폴더의 `SourceTrail.Mcp.dll` 옆에 `appsettings.json`을 둡니다. [appsettings.example.json](src/SourceTrail.Mcp/appsettings.example.json)을 복사해 경로를 채우세요. 분석 대상은 서버 쪽에서만 지정합니다.
+publish 폴더의 `SourceTrail.Mcp.dll` 옆에 `appsettings.json`을 둡니다. [appsettings.example.json](src/SourceTrail.Mcp/appsettings.example.json)을 복사해 경로를 채우세요. 분석 대상은 서버 설정에서만 지정하며 브리지도 같은 파일을 읽습니다.
 
 ```json
 {
@@ -130,48 +137,41 @@ publish 폴더의 `SourceTrail.Mcp.dll` 옆에 `appsettings.json`을 둡니다. 
 }
 ```
 
-### 2. 서버 시작과 자동 시작
+### 2. 서버 실행용 작업 (Windows, 자동 등록)
 
-```powershell
-dotnet D:\Tools\SourceTrail\artifacts\server\SourceTrail.Mcp.dll
-```
+따로 등록할 필요가 없습니다. 브리지는 작업 스케줄러의 `SourceTrail MCP` 작업으로 서버를 켜며, 작업이 없으면 처음 서버를 켤 때 현재 사용자 권한으로 자동 등록합니다(관리자 권한 불필요, 트리거 없음). 이렇게 켠 서버는 클라이언트의 프로세스 묶음 밖에서 실행되므로, 서버를 켠 대화를 닫아도 다른 대화가 계속 사용할 수 있습니다.
 
-로그인할 때 자동으로 뜨게 하려면 작업 스케줄러에 등록합니다.
+- 작업은 publish 폴더의 `SourceTrail.Launcher.exe`를 실행합니다. 창 없는 실행기이므로 기본 터미널 설정과 관계없이 **콘솔 창이 뜨지 않습니다.**
+- 브리지가 등록한 작업은 새 폴더에 publish하면 다음 서버 시작 때 실행 경로가 자동으로 바뀝니다.
+- 손으로 등록한 같은 이름의 작업은 바꾸지 않고 그대로 실행합니다. 3.1 이전 방식(`dotnet …dll` 실행)으로 등록한 작업은 서버가 켜질 때 창이 뜨므로 지우고 브리지가 다시 등록하게 하세요: `Unregister-ScheduledTask -TaskName 'SourceTrail MCP' -Confirm:$false`
+- 작업 스케줄러를 쓸 수 없으면 브리지가 실행기로 서버를 직접 켭니다. 창은 뜨지 않지만, 클라이언트가 프로세스 트리 전체를 종료하면 서버도 함께 종료될 수 있습니다.
 
-```powershell
-$dll = 'D:\Tools\SourceTrail\artifacts\server\SourceTrail.Mcp.dll'
-$action = New-ScheduledTaskAction -Execute 'dotnet' -Argument ('"' + $dll + '"') -WorkingDirectory (Split-Path $dll)
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName 'SourceTrail MCP' -Action $action -Trigger $trigger -Settings $settings
-Start-ScheduledTask -TaskName 'SourceTrail MCP'
-```
-
-### 3. 클라이언트 등록
-
-클라이언트에는 주소만 등록합니다.
+### 3. 클라이언트 등록 (브리지)
 
 | 클라이언트 | 등록 |
 |---|---|
-| Codex | `~/.codex/config.toml`에 `[mcp_servers.sourcetrail]`, `url = "http://127.0.0.1:3920/mcp"`, `tool_timeout_sec = 300` 또는 `codex mcp add sourcetrail --url http://127.0.0.1:3920/mcp` |
-| Claude Code | 프로젝트 `.mcp.json`에 `{"type": "http", "url": "http://127.0.0.1:3920/mcp", "timeout": 300000}` 또는 `claude mcp add --transport http --scope user sourcetrail http://127.0.0.1:3920/mcp` |
+| Codex | `~/.codex/config.toml`에 `[mcp_servers.sourcetrail]`, `command = "dotnet"`, `args = ['D:\Tools\SourceTrail\artifacts\server\SourceTrail.Mcp.dll', '--bridge']`, `startup_timeout_sec = 60`, `tool_timeout_sec = 300` |
+| Claude Code | 프로젝트 `.mcp.json`에 `{"type": "stdio", "command": "dotnet", "args": ["D:\\Tools\\SourceTrail\\artifacts\\server\\SourceTrail.Mcp.dll", "--bridge"], "timeout": 300000}` 또는 `claude mcp add --transport stdio --scope user sourcetrail -- dotnet 'D:\Tools\SourceTrail\artifacts\server\SourceTrail.Mcp.dll' --bridge` |
 
-등록 후 클라이언트를 다시 연결하고 `ping`이 `pong`을 반환하는지 확인합니다. 자세한 예시는 [MCP 등록 및 설정](docs/mcp-registration.md)에 있습니다.
+등록에는 서버 설정용 환경변수를 넣지 않습니다. 등록 후 클라이언트를 다시 연결하고 `ping`이 `pong`을 반환하는지 확인합니다. 자세한 예시는 [MCP 등록 및 설정](docs/mcp-registration.md)에 있습니다.
 
 ### 알아둘 점
 
+- **자동 종료는 연결된 브리지를 기준으로 합니다.** 브리지는 30초마다 연결 신호를 보내고, 서버는 90초 넘게 신호가 없는 브리지를 끊어진 것으로 봅니다. 대화를 열어 두면 쓰지 않아도 서버는 켜져 있습니다. 주소로 직접 등록한 클라이언트는 자동 종료 판단에 포함되지 않으므로, 자동 종료 서버를 쓸 때는 모든 클라이언트를 브리지로 등록하세요.
+- **서버가 도중에 꺼져도 다음 호출에서 브리지가 다시 켭니다.** 다시 켠 뒤에는 첫 조회에서 색인을 다시 메모리에 올립니다.
 - **이 PC에서만 접속할 수 있습니다.** 서버 주소는 루프백(127.0.0.1, localhost, [::1])만 허용하며 다른 주소면 서버가 시작하지 않습니다. 인증은 없으므로 같은 PC의 다른 프로세스는 접속할 수 있습니다.
 - **호출은 한 번에 하나씩 처리합니다.** 결과가 섞이지 않는 대신, 다른 클라이언트의 긴 호출(예: 서버 시작 직후 첫 전체 문자열 검색)이 끝날 때까지 기다릴 수 있습니다.
-- **분석 대상을 바꾸려면 서버 설정을 바꾸고 다시 시작합니다.** 한 클라이언트가 대상을 바꾸면 모든 클라이언트에 영향이 가므로 `load_solution`·`select_database_source`는 기본 차단입니다.
-- **서버를 다시 시작해야 하는 경우:** 분석 대상·캐시 경로 변경, 새 색인 세대 게시(`prepare-index`), 새 버전 publish. 클라이언트 등록은 주소가 같으면 그대로 둡니다.
-- **stdio도 사용할 수 있습니다.** 클라이언트가 직접 실행하게 하려면 등록 명령에 `--stdio`를 붙입니다(`dotnet …\SourceTrail.Mcp.dll --stdio`). 이 경우 클라이언트·대화마다 프로세스와 색인 메모리를 따로 씁니다.
-- **2.x에서 올릴 때:** 기존 stdio 등록은 `--stdio`가 없으면 연결되지 않습니다. HTTP로 전환하거나 `--stdio`를 추가하세요.
+- **분석 대상을 바꾸려면 서버 설정을 바꾸고 서버를 다시 시작합니다.** 한 클라이언트가 대상을 바꾸면 모든 클라이언트에 영향이 가므로 `load_solution`·`select_database_source`는 기본 차단입니다.
+- **서버를 다시 시작해야 하는 경우:** 분석 대상·캐시 경로 변경, 새 색인 세대 게시(`prepare-index`), 새 버전 publish. 실행 중인 `SourceTrail.Mcp.exe --http` 프로세스(이전 방식은 `dotnet …SourceTrail.Mcp.dll --http`)를 끄면 다음 호출에서 브리지가 새로 켭니다.
+- **계속 켜 두려면** 작업에 로그인 트리거를 추가하고 `--Server:AutoShutdown=true`를 빼거나, 클라이언트를 주소로 등록합니다.
+- **2.x에서 올릴 때:** 기존 stdio 등록은 `--bridge`(권장) 또는 `--stdio`를 붙여야 연결됩니다.
 
-설정 항목 전체, 상태 확인·중지 방법, 동작 원리는 [HTTP 상주 서버](docs/http-server.md)를 참고하세요.
+설정 항목 전체, 상태 확인·중지 방법, 동작 원리는 [HTTP 서버와 브리지](docs/http-server.md)를 참고하세요.
+
 
 ## 기존 설치 업데이트
 
-이미 설치했다면 아래 프롬프트를 사용하세요. **사용 지침 MD만 바뀌면 저장소 갱신으로 충분**합니다. 프로젝트가 같은 로컬 MD 경로를 참조한다면 링크를 다시 추가할 필요가 없습니다. 프로그램이 바뀐 경우에는 새 실행 폴더에 publish한 뒤 HTTP 서버를 새 폴더로 다시 시작합니다(stdio는 MCP 재연결). 업데이트마다 전체 색인을 재생성하지 않습니다. **2.x에서 3.0으로 올릴 때는 기본 실행 방식이 HTTP로 바뀌므로** [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 따릅니다.
+이미 설치했다면 아래 프롬프트를 사용하세요. **사용 지침 MD만 바뀌면 저장소 갱신으로 충분**합니다. 프로젝트가 같은 로컬 MD 경로를 참조한다면 링크를 다시 추가할 필요가 없습니다. 프로그램이 바뀐 경우에는 새 실행 폴더에 publish한 뒤 클라이언트 등록의 DLL 경로를 바꾸고 실행 중인 서버를 끕니다(브리지가 등록한 서버 실행용 작업은 자동으로 새 폴더를 가리킵니다). 다음 호출에서 브리지가 새 서버를 켭니다. 업데이트마다 전체 색인을 재생성하지 않습니다. **2.x에서 올릴 때는 실행 방식이 바뀌므로** [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 따릅니다.
 
 ```text
 이 PC의 기존 SourceTrail MCP를 GitHub 최신 master 기준으로 업데이트해줘.
@@ -199,11 +199,13 @@ Start-ScheduledTask -TaskName 'SourceTrail MCP'
    --rebuild 또는 refresh를 실행하지 않는다. 캐시 형식 변경 등으로 준비가 실제로
    필요하면 이유를 확인하고 증분 준비를 우선한다. 기존 버전의 복구용 색인도 보존한다.
 6. publish 성공 후 실행 경로를 새 폴더로 전환한다.
-   HTTP 상주 서버: 기존 서버 설정(appsettings.json)을 새 폴더로 옮기고 자동 시작 항목의
-   DLL 경로를 바꾼 뒤 기존 서버를 멈추고 새 서버를 시작한다. 주소가 같으면 클라이언트 등록은 바꾸지 않는다.
-   2.x stdio 등록을 3.0으로 올리는 경우: HTTP 전환(권장) 또는 args에 --stdio 추가 중
+   기존 서버 설정(appsettings.json)을 새 폴더로 옮기고, 클라이언트 등록의
+   DLL 경로를 바꾼 뒤 실행 중인 서버(--http)를 멈춘다. 브리지가 등록한 서버 실행용 작업은
+   다음 서버 시작 때 새 폴더로 자동 갱신된다. 손으로 등록한 작업('dotnet …dll' 실행)이면
+   사용자에게 알리고 삭제해 브리지가 창 없는 작업으로 다시 등록하게 한다. 브리지 등록은 --bridge를, 단독 stdio 등록은 --stdio를 유지한다.
+   주소로 등록한 클라이언트는 주소가 같으면 바꾸지 않는다.
+   2.x stdio 등록을 올리는 경우: 브리지 전환(권장), HTTP 주소 등록, args에 --stdio 추가 중
    무엇을 할지 사용자에게 먼저 묻는다. 그대로 두면 연결되지 않는다.
-   stdio 등록: 기존 sourcetrail 등록의 DLL 경로만 새 폴더로 바꾸고 --stdio를 유지한다.
    다른 MCP 등록은 변경하지 않고 중복 등록하지 않는다.
    ping과 기존 분석 대상의 C# 선언 검색·SQL 객체 조회를 확인한다.
    현재 대화에서 재연결할 수 없으면 '전환 완료·검증 대기'로 구분하고
@@ -240,13 +242,15 @@ Start-ScheduledTask -TaskName 'SourceTrail MCP'
 
 ```text
 소스·SQL 경로 확인 → publish → 최초 일괄 색인 생성 → 파일로 저장
-→ 서버 설정·시작(자동 시작 등록) → 클라이언트에 주소 등록 → 연결 → 실제 검색 검증
+→ 서버 설정·서버 실행용 작업 등록 → 클라이언트에 브리지 등록 → 연결 → 실제 검색 검증
 ```
 
 ### 서버를 시작할 때
 
 ```text
-서버 실행 → 설정 읽기 → 분석 경로와 일치하는 활성 색인 선택 → 127.0.0.1에서 요청 대기
+클라이언트가 브리지 실행 → 브리지가 서버 확인, 없으면 작업 스케줄러로 서버 실행
+→ 서버가 설정 읽기 → 분석 경로와 일치하는 활성 색인 선택 → 127.0.0.1에서 요청 대기
+→ 연결된 브리지가 모두 끝나고 10분 지나면 서버 종료
 ```
 
 일괄 색인이 있어도 시작 즉시 모든 내용을 메모리에 읽지는 않습니다. 서버가 받은 첫 관련 요청에서 파일 목록·캐시를 확인하고 필요한 색인을 메모리에 올립니다. 이후에는 어느 클라이언트의 요청이든 같은 메모리 색인을 재사용합니다.
@@ -379,6 +383,28 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 
 ## 성능 측정의 범위
 
+### 3.1 브리지와 프로시저 사용처 조회
+
+2026-11-23에 같은 실제 업무 솔루션으로 확인했습니다. 각 1회 관측이며 OS 캐시는 초기화하지 않았습니다.
+
+| 확인 항목 | 결과 |
+|---|---|
+| 서버가 없을 때 브리지 두 개를 동시에 시작 | 서버 1개만 실행, 두 번째 브리지는 기존 서버에 연결 |
+| 같은 SQL 객체 조회 (첫 브리지 / 두 번째 브리지) | 0.336초 / 0.014초 |
+| 첫 브리지 종료 후 두 번째 브리지 연결 중 | 서버 유지 |
+| 연결 중 서버를 강제 종료한 뒤 다음 호출 | 브리지가 서버를 다시 켜고 3.175초 만에 응답 |
+| 마지막 브리지 종료 | 유예 시간(검증용 20초) 뒤 서버 자동 종료 |
+
+`find_procedure_usage`는 모든 C# 파일을 차례로 읽던 방식에서 ripgrep으로 이름이 들어 있는 파일만 골라 읽도록 바꿨습니다. ripgrep이 없거나 실패하면 기존 방식으로 읽습니다.
+
+| 프로시저 사용처 조회 | 3.0.0 | 3.1.0 |
+|---|---:|---:|
+| `usp_delete_InfoReceptionItem` 첫 호출 | 70.573초 | 1.589초 |
+| 같은 조회 반복 | 24.187초 | 0.335초 |
+| `usp_insert_SmartInfoReception` | 25.755초 | 0.494초 |
+
+반환한 후보 수와 위치는 같았습니다(각 2건, 2건). `find_reference_candidates`도 같은 방식으로 바꿨습니다.
+
 ### 3.0 공유 서버 확인
 
 2026-11-23에 HTTP 서버 하나에 클라이언트 세 개를 붙여 같은 프로세스와 메모리 색인을 공유하는지 확인했습니다. 대상은 실제 업무 솔루션(C# 파일 6,707개, SQL 1,889개)과 미리 생성한 일괄 색인입니다. 각 1회 관측이며 OS 캐시는 초기화하지 않았습니다.
@@ -422,7 +448,7 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 선언·참조·DB 명령은 파일·구문 기반 후보입니다. 오버로드·수신 타입·런타임 분기·실제 endpoint와 DB 배포를 자동으로 확정하지 않습니다. `Ready`는 색인/검색 준비 상태이며 컴파일 성공이 아닙니다. 전체 그래프·자동 WCF 연결·LiveDatabase는 2.0에서 제거했습니다.
 
 - [도구와 반환 의미](docs/tools.md)
-- [HTTP 상주 서버 — 실행·자동 시작·제한·2.x에서 옮기기](docs/http-server.md)
+- [HTTP 서버와 브리지 — 실행·자동 종료·제한·2.x에서 옮기기](docs/http-server.md)
 - [MCP 등록·설정 — Codex / Claude Code](docs/mcp-registration.md)
 - [일괄 색인 상세](docs/index-preparation.md)
 - [구조와 캐시](docs/architecture.md)

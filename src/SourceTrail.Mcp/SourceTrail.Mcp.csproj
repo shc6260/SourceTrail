@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <Version>3.0.0</Version>
+    <Version>3.1.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" />
@@ -10,8 +10,13 @@
     <ProjectReference Include="../SourceTrail.Core/SourceTrail.Core.csproj" />
     <ProjectReference Include="../SourceTrail.Roslyn/SourceTrail.Roslyn.csproj" />
     <ProjectReference Include="../SourceTrail.SqlServer/SourceTrail.SqlServer.csproj" />
+    <!-- Copies the windowless SourceTrail.Launcher.exe next to the server so bridges and the launch task can use it. -->
+    <ProjectReference Include="../SourceTrail.Launcher/SourceTrail.Launcher.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="appsettings.example.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SourceTrail.Tests" />
   </ItemGroup>
 </Project>

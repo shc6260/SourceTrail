@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -43,10 +44,21 @@ internal static class Program
             Environment.ExitCode = 2;
             return;
         }
-        if (server.UsesHttp)
+        if (server.UsesBridge)
+            await RunBridgeAsync(server);
+        else if (server.UsesHttp)
             await RunHttpAsync(args, server);
         else
             await RunStdioAsync(args, server);
+    }
+
+    // 클라이언트가 stdio로 실행하는 가벼운 중계기. 공유 HTTP 서버가 없으면 켜고 요청을 전달한다.
+    private static async Task RunBridgeAsync(ServerOptions server)
+    {
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+        var bridge = new Bridge.McpBridge(server, typeof(Program).Assembly.Location, Console.Error);
+        Environment.ExitCode = await bridge.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput(), cancellation.Token);
     }
 
     // 기본: 한 번 띄운 상주 프로세스를 여러 MCP 클라이언트가 HTTP로 함께 사용한다.
@@ -61,14 +73,19 @@ internal static class Program
         ConfigureLogging(builder.Logging);
         RegisterServices(builder.Services, builder.Configuration, server);
         builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
+        builder.Services.AddSingleton(new Bridge.BridgeRegistry());
+        if (server.AutoShutdown) builder.Services.AddHostedService<Bridge.AutoShutdownService>();
         builder.WebHost.UseUrls(server.Url);
 
         await using var app = builder.Build();
         app.MapMcp(server.Path);
+        // 브리지가 연결 중임을 알리는 신호. 자동 종료 서버는 신호가 끊긴 뒤 유예 시간이 지나면 종료한다.
+        app.MapPost("/bridge/heartbeat", (Bridge.BridgeBeat beat, Bridge.BridgeRegistry bridges) => { bridges.Touch(beat.Id); return Results.Ok(); });
+        app.MapPost("/bridge/leave", (Bridge.BridgeBeat beat, Bridge.BridgeRegistry bridges) => { bridges.Leave(beat.Id); return Results.Ok(); });
         var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
         using var measurements = AnalysisTelemetry.Listen(message => startupLogger.LogInformation("{Measurement}", message));
-        startupLogger.LogInformation("SourceTrail MCP starting (HTTP) at {Url}{Path}. Target changes allowed: {Allowed}.",
-            server.Url.TrimEnd('/'), server.Path, server.TargetChangesAllowed);
+        startupLogger.LogInformation("SourceTrail MCP starting (HTTP) at {Url}{Path}. Target changes allowed: {Allowed}. Auto-shutdown: {AutoShutdown}.",
+            server.Url.TrimEnd('/'), server.Path, server.TargetChangesAllowed, server.AutoShutdown);
         await app.RunAsync();
     }
 

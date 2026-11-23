@@ -34,6 +34,12 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 - 후보 목록이 limit에 걸리면 truncated를 확인하고 범위를 좁히거나 한도를 조정합니다.
 - locationsOnly와 includeDefinition을 동시에 사용할 수 없습니다. SQL은 로컬 파일만 읽습니다.
 
+## 3.1 변경
+
+- 클라이언트에 등록하는 브리지(`--bridge`)를 추가했습니다. 브리지는 공유 HTTP 서버가 없으면 켜고, 연결된 브리지가 모두 끝나면 서버가 10분 뒤 종료합니다. [HTTP 서버와 브리지](http-server.md)
+- `find_procedure_usage`·`find_reference_candidates`는 ripgrep으로 이름이 들어 있는 C# 파일만 골라 읽습니다. 실제 업무 솔루션에서 프로시저 사용처 조회가 24~70초에서 0.2~1.6초로 줄었습니다. ripgrep이 없거나 실패하면 모든 파일을 읽는 기존 방식으로 동작합니다.
+- 도구 이름·인자·응답 형식은 3.0과 같습니다.
+
 ## 3.0 변경
 
 - 기본 실행 방식이 로컬 HTTP 상주 서버(`http://127.0.0.1:3920/mcp`)로 바뀌었습니다. stdio는 `--stdio`로 사용합니다. [HTTP 상주 서버](http-server.md)

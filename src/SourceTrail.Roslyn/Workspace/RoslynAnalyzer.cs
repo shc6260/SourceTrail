@@ -136,8 +136,9 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
                 {
                     token.ThrowIfCancellationRequested();
                     if (file.Hash.Length == 0 && !(await File.ReadAllTextAsync(file.File, token)).Contains(leaf, StringComparison.OrdinalIgnoreCase)) continue;
-                    await EnsureParsedAsync(file.File, token);
+                    await EnsureParsedAsync(file.File, token, updateSymbols: false);
                 }
+                RefreshIndexedSymbols();
             }
             await ParseCandidates(preferred);
             bool prioritized = preferred.Length > 0 && _indexedSymbols.Any(symbol => preferred.Any(file => file.File == symbol.File) && Matches(symbol, query));
@@ -190,10 +191,12 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
         try
         {
             var declaration = Resolve(symbol); var references = new List<ReferenceInfo>();
+            var candidates = await SourceCandidatesAsync(declaration.Name, token);
             foreach (var file in _sourceFiles)
             {
+                if (candidates.Skip(file.File)) continue;
                 if (!(await File.ReadAllTextAsync(file.File, token)).Contains(declaration.Name, StringComparison.Ordinal)) continue;
-                var root = await RootAsync(file, token);
+                var root = await RootAsync(file, token, updateSymbols: false);
                 foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>().Where(name => name.Identifier.ValueText == declaration.Name))
                 {
                     var span = name.GetLocation().GetLineSpan();
@@ -201,6 +204,7 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
                         span.StartLinePosition.Character + 1, "NameReferenceCandidate"));
                 }
             }
+            RefreshIndexedSymbols();
             await PersistParsedAsync(token);
             return Paginate(references.ToArray(), offset, limit);
         }
@@ -213,10 +217,13 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
         {
             RequireIndex(); var usages = new List<ProcedureUsage>();
             var requested = procedure.Replace("[", "").Replace("]", "");
+            var name = requested.Split('.').Last();
+            var candidates = await SourceCandidatesAsync(name, token);
             foreach (var file in _sourceFiles)
             {
-                if (!(await File.ReadAllTextAsync(file.File, token)).Contains(requested.Split('.').Last(), StringComparison.OrdinalIgnoreCase)) continue;
-                var root = await RootAsync(file, token);
+                if (candidates.Skip(file.File)) continue;
+                if (!(await File.ReadAllTextAsync(file.File, token)).Contains(name, StringComparison.OrdinalIgnoreCase)) continue;
+                var root = await RootAsync(file, token, updateSymbols: false);
                 foreach (var literal in root.DescendantNodes().OfType<LiteralExpressionSyntax>().Where(node => node.IsKind(SyntaxKind.StringLiteralExpression)))
                 {
                     var value = literal.Token.ValueText.Replace("[", "").Replace("]", "");
@@ -226,6 +233,7 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
                         "ProcedureNameCandidate", false, "String literal in source; execution is not inferred."));
                 }
             }
+            RefreshIndexedSymbols();
             await PersistParsedAsync(token);
             return Paginate(usages.ToArray(), offset, limit);
         }
@@ -246,6 +254,7 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
         _sourceFiles[index] = parsed;
         _parsedDirty = true;
         if (updateSymbols) _indexedSymbols = _sourceFiles.SelectMany(source => source.Symbols).ToArray();
+        else _symbolsStale = true;
         if (_roots.Count >= 24) _roots.Clear(); _roots[path] = root;
         return parsed;
     }
@@ -261,9 +270,9 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
         }
         _parsedDirty = false;
     }
-    private async Task<SyntaxNode> RootAsync(SourceFile file, CancellationToken token)
+    private async Task<SyntaxNode> RootAsync(SourceFile file, CancellationToken token, bool updateSymbols = true)
     {
-        file = await EnsureParsedAsync(file.File, token);
+        file = await EnsureParsedAsync(file.File, token, updateSymbols);
         if (_roots.TryGetValue(file.File, out var root)) return root;
         var bytes = await File.ReadAllBytesAsync(file.File, token);
         if (Convert.ToHexString(SHA256.HashData(bytes)) != file.Hash) throw new ArgumentException("Source changed after indexing; refresh and retry with current source IDs.");
