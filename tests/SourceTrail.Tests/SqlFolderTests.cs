@@ -134,7 +134,7 @@ public sealed class SqlFolderTests : IDisposable
         Write("two.sql", "CREATE PROCEDURE dbo.P AS SELECT 2;");
         using var db = new DatabaseAnalyzer(Options);
         using var gate = new SemaphoreSlim(1, 1);
-        var tool = new DatabaseTools(db, NullLogger<DatabaseTools>.Instance);
+        var tool = new DatabaseTools(db, NullLogger<DatabaseTools>.Instance, new SourceTrail.Mcp.ServerOptions());
         const string query = "dbo.P";
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         var detailed = JsonSerializer.SerializeToElement(await tool.FindSqlObject(query, default, limit: 1), options);

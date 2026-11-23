@@ -6,11 +6,14 @@ using SourceTrail.Core.Models;
 using SourceTrail.SqlServer.Metadata;
 namespace SourceTrail.Mcp.Tools;
 [McpServerToolType]
-public sealed class DatabaseTools(DatabaseAnalyzer database, ILogger<DatabaseTools> logger)
+public sealed class DatabaseTools(DatabaseAnalyzer database, ILogger<DatabaseTools> logger, ServerOptions server)
 {
-    [McpServerTool(Name = "select_database_source", ReadOnly = true, Destructive = false), Description("Selects a local SQL script folder. Only mode SqlFiles is supported; never connects to SQL Server. Source files are read-only; index caches may be written.")]
-    public Task<SqlSourceState> SelectDatabaseSource(string mode, CancellationToken cancellationToken, string? sqlFolder = null) =>
-        Run("select_database_source", () => database.SelectAsync(mode, sqlFolder, cancellationToken), cancellationToken);
+    [McpServerTool(Name = "select_database_source", ReadOnly = true, Destructive = false), Description("Selects a local SQL script folder. Only mode SqlFiles is supported; never connects to SQL Server. Source files are read-only; index caches may be written. Disabled on the shared HTTP server unless Server:AllowTargetChanges=true, because it changes the target for every client.")]
+    public Task<SqlSourceState> SelectDatabaseSource(string mode, CancellationToken cancellationToken, string? sqlFolder = null)
+    {
+        TargetChangeGuard.EnsureAllowed(server, "select_database_source", "Database:SqlFolder");
+        return Run("select_database_source", () => database.SelectAsync(mode, sqlFolder, cancellationToken), cancellationToken);
+    }
     [McpServerTool(Name = "get_database_status", ReadOnly = true, Destructive = false), Description("Reports the local SQL folder and index diagnostics. No DB connection.")]
     public SqlSourceState GetDatabaseStatus() => database.Status();
     [McpServerTool(Name = "refresh_database_source", ReadOnly = true, Destructive = false), Description("Reconciles local SQL files against cache, including additions/changes/deletions.")]

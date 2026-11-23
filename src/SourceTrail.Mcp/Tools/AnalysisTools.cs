@@ -10,11 +10,14 @@ namespace SourceTrail.Mcp.Tools;
 
 [McpServerToolType]
 public sealed class AnalysisTools(ICodeAnalyzer code,
-    ILogger<AnalysisTools> logger, AnalysisOptions options, SemaphoreSlim executionGate)
+    ILogger<AnalysisTools> logger, AnalysisOptions options, SemaphoreSlim executionGate, ServerOptions server)
 {
-    [McpServerTool(Name = "load_solution", ReadOnly = true, Destructive = false), Description("Indexes an existing absolute source folder or .sln directory using files and C# syntax only. No compiler, MSBuild, project evaluation or reference DLL loading. Returns source-index state; CompilationErrors is not evaluated.")]
-    public Task<SolutionState> LoadSolution(string solutionPath, CancellationToken cancellationToken) =>
-        Run(cancellationToken, "load_solution", () => code.LoadAsync(solutionPath, cancellationToken));
+    [McpServerTool(Name = "load_solution", ReadOnly = true, Destructive = false), Description("Indexes an existing absolute source folder or .sln directory using files and C# syntax only. No compiler, MSBuild, project evaluation or reference DLL loading. Returns source-index state; CompilationErrors is not evaluated. Disabled on the shared HTTP server unless Server:AllowTargetChanges=true, because it changes the target for every client.")]
+    public Task<SolutionState> LoadSolution(string solutionPath, CancellationToken cancellationToken)
+    {
+        TargetChangeGuard.EnsureAllowed(server, "load_solution", "Analysis:SolutionPath");
+        return Run(cancellationToken, "load_solution", () => code.LoadAsync(solutionPath, cancellationToken));
+    }
 
     [McpServerTool(Name = "get_analysis_status", ReadOnly = true, Destructive = false), Description("Returns source-index state and syntax/read diagnostics. Ready means indexing completed, not successful compilation. The configured folder/solution is indexed on first declaration search.")]
     public SolutionState GetAnalysisStatus() => code.Status();

@@ -13,7 +13,7 @@ public sealed class PerformanceRegressionTests
     public async Task TextSearchSkipsIndexPreparationAndSourceFailuresReleaseGate()
     {
         using var code = new StubCode(); using var gate = new SemaphoreSlim(1, 1);
-        var tools = new AnalysisTools(code, NullLogger<AnalysisTools>.Instance, new AnalysisOptions(), gate);
+        var tools = new AnalysisTools(code, NullLogger<AnalysisTools>.Instance, new AnalysisOptions(), gate, new SourceTrail.Mcp.ServerOptions());
         await tools.SearchText("Save", default);
         Assert.Equal(0, code.FreshnessCalls);
         await Assert.ThrowsAsync<InvalidOperationException>(() => tools.FindSymbol("Save", default));

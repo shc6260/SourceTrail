@@ -7,8 +7,8 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 | 도구 | 용도와 주요 인자 |
 |---|---|
 | ping | 연결 확인 |
-| prepare_indexes | 명시적 C#·UI·SQL 일괄 준비. rebuild 기본 false(증분), true(전체 재생성). 완료 후 MCP 재연결. [사용법](index-preparation.md) |
-| load_solution | solutionPath: 절대 소스 폴더 또는 .sln. 파일 목록만 먼저 준비 |
+| prepare_indexes | 명시적 C#·UI·SQL 일괄 준비. rebuild 기본 false(증분), true(전체 재생성). 완료 후 HTTP 서버 재시작(stdio는 MCP 재연결). [사용법](index-preparation.md) |
+| load_solution | solutionPath: 절대 소스 폴더 또는 .sln. 파일 목록만 먼저 준비. HTTP 공유 서버에서는 기본 차단 |
 | get_analysis_status / reload_solution | 마지막 소스 색인 상태 / 파일 변경 대조 |
 | find_ui_actions | query: 접수 저장 또는 접수저장, limit 기본 5 |
 | find_event_handlers | file: C#·Designer 경로, query: 버튼·핸들러명 |
@@ -18,7 +18,7 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 | find_reference_candidates | symbol: 선언 ID. 같은 이름의 구문상 사용 후보 |
 | find_procedure_usage | procedure: SQL 이름. 문자열 리터럴 후보, IsVerifiedCall=false |
 | find_database_calls | symbol: 메서드 ID·전체 이름, limit 기본 20. 현재 메서드 DB 후보와 methodCandidates |
-| select_database_source | mode: SqlFiles, sqlFolder: 로컬 SQL 폴더 절대 경로 |
+| select_database_source | mode: SqlFiles, sqlFolder: 로컬 SQL 폴더 절대 경로. HTTP 공유 서버에서는 기본 차단 |
 | get_database_status / refresh_database_source | SQL 색인 상태 / 파일 변경 대조 |
 | find_sql_object | query, offset/limit, locationsOnly 또는 includeDefinition |
 | analyze_procedure | procedure, includeDefinition. SQL 정의 출처와 직접 참조 |
@@ -33,6 +33,12 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 - methodCandidates의 다음 호출명을 선택해 선언·원문 검색을 이어갑니다. 자동 재귀 탐색은 하지 않습니다.
 - 후보 목록이 limit에 걸리면 truncated를 확인하고 범위를 좁히거나 한도를 조정합니다.
 - locationsOnly와 includeDefinition을 동시에 사용할 수 없습니다. SQL은 로컬 파일만 읽습니다.
+
+## 3.0 변경
+
+- 기본 실행 방식이 로컬 HTTP 상주 서버(`http://127.0.0.1:3920/mcp`)로 바뀌었습니다. stdio는 `--stdio`로 사용합니다. [HTTP 상주 서버](http-server.md)
+- HTTP 공유 서버에서는 `load_solution`·`select_database_source`가 기본 차단됩니다. 한 클라이언트의 호출이 모든 클라이언트의 분석 대상을 바꾸기 때문입니다. `Server:AllowTargetChanges=true`로 허용할 수 있습니다.
+- 도구 이름·인자·응답 형식은 2.0과 같습니다.
 
 ## 2.0 API 변경
 

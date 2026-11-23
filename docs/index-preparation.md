@@ -32,6 +32,6 @@ Indexing.Directory 기본값은 `%LOCALAPPDATA%\SourceTrail\prepared-index`입�
 
 기존 게시 세대는 자동 삭제하지 않습니다. 이미 실행 중인 MCP가 이전 세대를 계속 사용할 수 있기 때문입니다. 따라서 전체 재생성은 추가 디스크 공간이 필요합니다. 디스크 공간이 부족하면 새 작업을 실패시키고 기존 세대를 유지합니다.
 
-**MCP를 재연결하면**, 시작 시 active.json의 소스·SQL 경로가 설정과 일치하는 경우 해당 세대의 C#·SQL 캐시를 함께 사용합니다. `Indexing__Directory` 또는 appsettings.json의 `Indexing.Directory`가 준비 명령과 같아야 합니다. 기존 프로세스는 자동 교체하지 않습니다. 활성 색인이 없거나 경로가 다르면 기존의 요청 시 준비 방식을 사용합니다. 경로 일치 시 활성 세대의 캐시 경로가 Analysis.CodeCacheDirectory와 Database.CacheDirectory보다 우선합니다.
+**HTTP 서버를 다시 시작하거나 stdio MCP를 재연결하면**, 시작 시 active.json의 소스·SQL 경로가 설정과 일치하는 경우 해당 세대의 C#·SQL 캐시를 함께 사용합니다. `Indexing__Directory` 또는 appsettings.json의 `Indexing.Directory`가 준비 명령과 같아야 합니다. 기존 프로세스는 자동 교체하지 않습니다. 활성 색인이 없거나 경로가 다르면 기존의 요청 시 준비 방식을 사용합니다. 경로 일치 시 활성 세대의 캐시 경로가 Analysis.CodeCacheDirectory와 Database.CacheDirectory보다 우선합니다.
 
 현재 C# 선언 캐시는 한 소스 목록 파일에 저장하므로 큰 소스 트리에서는 저장·재로딩 비용과 크기가 커질 수 있습니다. 일괄 생성은 이 비용을 사전 준비 단계로 옮기며 검색 속도 향상을 보장하지는 않습니다. 첫 생성 시간, 캐시 크기, 재실행 로딩 시간을 별도로 측정해야 합니다. 추가 텍스트 검색 경로는 C# 선언 일괄 색인 대상에 포함하지 않습니다.

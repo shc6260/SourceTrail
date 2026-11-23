@@ -1,10 +1,13 @@
-# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 2.0.1
+# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.0.0
 
 C# WinForms의 화면·이벤트에서 서비스와 DB 호출 위치를 찾고, 로컬 SQL 파일에서 프로시저 정의와 직접 참조를 확인하는 MCP 서버입니다. 파일·줄 번호를 근거로 **MCP로 위치 찾기 → 원문에서 실제 이름 확인 → 그 이름으로 MCP 재검색** 순서로 사용합니다.
+
+3.0부터 **로컬 HTTP 상주 서버가 기본**입니다. PC에 서버를 하나 띄워 두면 Claude Code의 여러 대화와 Codex가 `http://127.0.0.1:3920/mcp`로 같은 프로세스를 공유하고, 색인은 한 번만 메모리에 올립니다. 클라이언트마다 프로세스를 띄우는 stdio는 `--stdio`로 사용할 수 있습니다. 2.x의 stdio 등록은 그대로 두면 연결되지 않으므로 [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 확인하세요.
 
 C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지 않습니다. DB는 `SqlFiles`만 지원하고 SQL Server에 접속하지 않습니다. 검색은 원본을 읽고, 색인 준비·갱신은 로컬 캐시만 저장합니다. 반환된 이름·Adapter 매핑은 정적 후보이므로 실제 연결과 조건은 원문으로 확인합니다.
 
 - [설치 프롬프트](#ai-도구에-설치-맡기기)
+- [서버 실행과 클라이언트 등록](#서버-실행과-클라이언트-등록)
 - [기존 설치 업데이트](#기존-설치-업데이트)
 - [프로젝트에 사용 지침 적용](#프로젝트에-사용-지침-적용)
 - [실행·검색 순서](#실행검색-순서)
@@ -15,7 +18,7 @@ C# 구문 파서를 사용하며 컴파일·MSBuild·참조 DLL 로딩은 하지
 
 ## AI 도구에 설치 맡기기
 
-아래 프롬프트를 Windows의 Codex 또는 Claude Code에 붙여넣으세요. SourceTrail은 로컬 stdio MCP를 지원하는 클라이언트에서 사용할 수 있습니다. 소스와 SQL 경로는 자신의 경로로 채웁니다. 비워 두면 설치 에이전트가 확인하도록 되어 있습니다. `.sln` 없이 소스 폴더를 지정해도 됩니다.
+아래 프롬프트를 Windows의 Codex 또는 Claude Code에 붙여넣으세요. SourceTrail은 로컬 HTTP(streamable HTTP) MCP를 지원하는 클라이언트에서 사용할 수 있으며, stdio만 지원하는 클라이언트는 `--stdio`로 등록합니다. 소스와 SQL 경로는 자신의 경로로 채웁니다. 비워 두면 설치 에이전트가 확인하도록 되어 있습니다. `.sln` 없이 소스 폴더를 지정해도 됩니다.
 
 ```text
 이 Windows PC에 SourceTrail MCP를 설치하고 현재 사용 중인 MCP 클라이언트에 등록해줘.
@@ -47,18 +50,25 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
    기존 색인을 먼저 지우지 않는다. 종료 코드 0과 Published=true를 확인한다.
    생성·재사용 건수, 구문 진단·SQL 경고, 단계별 시간을 기록한다.
    실패하면 설치 완료로 보고하지 않는다.
-6. docs/mcp-registration.md에서 현재 클라이언트의 절차에 따라
-   sourcetrail을 로컬 stdio MCP 서버로 등록한다. 다른 클라이언트 설정은 변경하지 않는다.
-   command는 dotnet, args는 publish한 SourceTrail.Mcp.dll의 절대 경로로 지정한다.
-   Analysis__SolutionPath, Database__SqlFolder는 준비에 사용한 경로와 같게 설정한다.
-   Database__Mode=SqlFiles, Indexing__Directory는 4~5번과 같은 절대 경로를 사용한다.
-   신규 설치 권장값은 Analysis__WatchCodeFiles=true,
-   Analysis__CodeRescanIntervalSeconds=30이다. 사용자가 명시한 기존 설정은 유지한다.
+6. docs/http-server.md에 따라 HTTP 상주 서버를 설정하고 시작한다.
+   publish 폴더의 SourceTrail.Mcp.dll 옆 appsettings.json에 서버 설정을 둔다.
+   Analysis.SolutionPath, Database.SqlFolder는 준비에 사용한 경로와 같게 설정한다.
+   Database.Mode=SqlFiles, Indexing.Directory는 4~5번과 같은 절대 경로를 사용한다.
+   신규 설치 권장값은 Analysis.WatchCodeFiles=true, Analysis.CodeRescanIntervalSeconds=30이다.
+   rg 경로를 확인했으면 Analysis.RipgrepPath에 지정한다. 사용자가 명시한 기존 설정은 유지한다.
+   Server.Url 기본값 http://127.0.0.1:3920을 사용하고 루프백이 아닌 주소는 쓰지 않는다.
+   포트가 이미 사용 중이면 사용자에게 알리고 다른 포트를 정한다.
+   로그인 시 자동 시작 등록(작업 스케줄러)은 사용자에게 확인받은 뒤 진행한다.
+   서버를 시작하고 수신 중인지 확인한다.
+7. docs/mcp-registration.md에서 현재 클라이언트의 절차에 따라
+   sourcetrail을 HTTP MCP 서버(http://127.0.0.1:3920/mcp)로 등록한다.
+   서버 설정용 환경변수는 클라이언트 등록에 넣지 않는다. 다른 클라이언트 설정은 변경하지 않는다.
    연결 대기 30초·도구 대기 300초를 신규 권장값으로 사용하고 기존 값은 유지한다.
    대기 시간은 클라이언트별 지원 방식으로 설정한다. Codex 전용 설정 키를
    다른 클라이언트에 복사하지 않는다. 지원 여부를 확인하지 못하면 확인 필요로 남긴다.
+   클라이언트가 HTTP를 지원하지 않으면 args에 --stdio를 붙인 stdio 등록을 사용한다.
    다른 MCP 등록을 변경하지 않고 sourcetrail을 중복 등록하지 않는다.
-7. MCP를 새로 연결하고 ping의 pong을 확인한다.
+8. MCP를 새로 연결하고 ping의 pong을 확인한다.
    설정된 소스에서 실제로 확인한 식별자로 선언 검색을 한 번 수행하고,
    실제 SQL 파일에서 확인한 객체명으로 find_sql_object를 호출한다.
    상태·대상 경로·파일 수·주요 진단을 확인한다.
@@ -68,7 +78,8 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 설치 결과를 표로 정리해줘:
 - 저장소·실행 DLL 위치
-- 사용한 MCP 클라이언트·설정 파일·등록 범위와 MCP 실행 명령
+- HTTP 서버 주소·서버 설정 파일·자동 시작 여부
+- 사용한 MCP 클라이언트·설정 파일·등록 범위와 등록 주소(stdio면 실행 명령)
 - C#·SQL 분석 대상
 - 일괄 색인 저장소, 활성 세대, 생성·재사용 건수와 주요 경고
 - 변경 감지 설정과 연결·호출 대기 시간
@@ -82,7 +93,8 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 | 항목 | 기본·권장값 |
 |---|---|
-| 실행 방식 | 로컬 stdio, `dotnet` + publish된 `SourceTrail.Mcp.dll` |
+| 실행 방식 | 로컬 HTTP 상주 서버 `http://127.0.0.1:3920/mcp` (`dotnet` + publish된 `SourceTrail.Mcp.dll`). 루프백만 허용. `--stdio`로 클라이언트별 실행 |
+| 서버 설정 | DLL 옆 `appsettings.json`. HTTP에서는 클라이언트 등록에 주소만 적음 |
 | 분석 대상 | 확인한 절대 소스 폴더 또는 `.sln`, 로컬 SQL 폴더 |
 | 일괄 색인 | `%LOCALAPPDATA%\SourceTrail\prepared-index` |
 | 활성 세대가 없을 때 C# 캐시 | `Analysis.CodeCacheDirectory`. 빈 값이면 C# 디스크 재사용 비활성화 |
@@ -93,11 +105,73 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 일괄 색인은 MCP 클라이언트의 프로젝트 폴더와 별개입니다. **어떤 클라이언트 프로젝트를 열었는지가 아니라 MCP에 설정된 소스·SQL 경로를 따릅니다.** 저장소 하나에는 활성 세대 하나가 있고, 소스·SQL 경로가 모두 일치할 때 해당 세대의 캐시를 사용합니다. 여러 분석 대상을 각각 유지하려면 저장소와 MCP 설정을 분리하세요. 클라이언트 프로젝트별 자동 분리 기능은 없습니다.
 
-설정은 실행 DLL 옆 `appsettings.json` 또는 MCP 환경변수로 지정합니다. 환경변수가 JSON보다 우선합니다. `Indexing.Directory`를 생략하면 기본 저장소를 사용하며, 별도 경로를 지정하면 준비 명령과 MCP 설정을 동일하게 맞춰야 합니다. 활성 세대가 일치하면 그 안의 C#·SQL 캐시가 개별 캐시 경로보다 우선합니다.
+설정은 실행 DLL 옆 `appsettings.json` 또는 환경변수로 지정합니다. HTTP 상주 서버는 서버를 실행하는 환경의 환경변수를, stdio는 클라이언트 등록의 환경변수를 읽습니다. 환경변수가 JSON보다 우선합니다. `Indexing.Directory`를 생략하면 기본 저장소를 사용하며, 별도 경로를 지정하면 준비 명령과 MCP 설정을 동일하게 맞춰야 합니다. 활성 세대가 일치하면 그 안의 C#·SQL 캐시가 개별 캐시 경로보다 우선합니다.
+
+## 서버 실행과 클라이언트 등록
+
+SourceTrail은 PC에 **서버 하나를 계속 띄워 두고** 여러 클라이언트가 주소로 접속하는 방식이 기본입니다. Claude Code의 여러 대화, Codex, 스크립트 작업자가 같은 프로세스와 메모리 색인을 함께 사용하므로 색인 로딩은 서버가 뜬 뒤 첫 조회 한 번뿐입니다.
+
+```text
+클라이언트 A ─┐
+클라이언트 B ─┼─ http://127.0.0.1:3920/mcp ─→ SourceTrail 서버 1개 (색인 공유)
+클라이언트 C ─┘
+```
+
+### 1. 서버 설정
+
+publish 폴더의 `SourceTrail.Mcp.dll` 옆에 `appsettings.json`을 둡니다. [appsettings.example.json](src/SourceTrail.Mcp/appsettings.example.json)을 복사해 경로를 채우세요. 분석 대상은 서버 쪽에서만 지정합니다.
+
+```json
+{
+  "Server": { "Url": "http://127.0.0.1:3920", "Path": "/mcp" },
+  "Analysis": { "SolutionPath": "D:\\Projects\\Sample\\Sample.sln", "WatchCodeFiles": true, "CodeRescanIntervalSeconds": 30 },
+  "Database": { "Mode": "SqlFiles", "SqlFolder": "D:\\Projects\\Sample\\DatabaseScripts" },
+  "Indexing": { "Directory": "C:\\Users\\<사용자>\\AppData\\Local\\SourceTrail\\prepared-index" }
+}
+```
+
+### 2. 서버 시작과 자동 시작
+
+```powershell
+dotnet D:\Tools\SourceTrail\artifacts\server\SourceTrail.Mcp.dll
+```
+
+로그인할 때 자동으로 뜨게 하려면 작업 스케줄러에 등록합니다.
+
+```powershell
+$dll = 'D:\Tools\SourceTrail\artifacts\server\SourceTrail.Mcp.dll'
+$action = New-ScheduledTaskAction -Execute 'dotnet' -Argument ('"' + $dll + '"') -WorkingDirectory (Split-Path $dll)
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'SourceTrail MCP' -Action $action -Trigger $trigger -Settings $settings
+Start-ScheduledTask -TaskName 'SourceTrail MCP'
+```
+
+### 3. 클라이언트 등록
+
+클라이언트에는 주소만 등록합니다.
+
+| 클라이언트 | 등록 |
+|---|---|
+| Codex | `~/.codex/config.toml`에 `[mcp_servers.sourcetrail]`, `url = "http://127.0.0.1:3920/mcp"`, `tool_timeout_sec = 300` 또는 `codex mcp add sourcetrail --url http://127.0.0.1:3920/mcp` |
+| Claude Code | 프로젝트 `.mcp.json`에 `{"type": "http", "url": "http://127.0.0.1:3920/mcp", "timeout": 300000}` 또는 `claude mcp add --transport http --scope user sourcetrail http://127.0.0.1:3920/mcp` |
+
+등록 후 클라이언트를 다시 연결하고 `ping`이 `pong`을 반환하는지 확인합니다. 자세한 예시는 [MCP 등록 및 설정](docs/mcp-registration.md)에 있습니다.
+
+### 알아둘 점
+
+- **이 PC에서만 접속할 수 있습니다.** 서버 주소는 루프백(127.0.0.1, localhost, [::1])만 허용하며 다른 주소면 서버가 시작하지 않습니다. 인증은 없으므로 같은 PC의 다른 프로세스는 접속할 수 있습니다.
+- **호출은 한 번에 하나씩 처리합니다.** 결과가 섞이지 않는 대신, 다른 클라이언트의 긴 호출(예: 서버 시작 직후 첫 전체 문자열 검색)이 끝날 때까지 기다릴 수 있습니다.
+- **분석 대상을 바꾸려면 서버 설정을 바꾸고 다시 시작합니다.** 한 클라이언트가 대상을 바꾸면 모든 클라이언트에 영향이 가므로 `load_solution`·`select_database_source`는 기본 차단입니다.
+- **서버를 다시 시작해야 하는 경우:** 분석 대상·캐시 경로 변경, 새 색인 세대 게시(`prepare-index`), 새 버전 publish. 클라이언트 등록은 주소가 같으면 그대로 둡니다.
+- **stdio도 사용할 수 있습니다.** 클라이언트가 직접 실행하게 하려면 등록 명령에 `--stdio`를 붙입니다(`dotnet …\SourceTrail.Mcp.dll --stdio`). 이 경우 클라이언트·대화마다 프로세스와 색인 메모리를 따로 씁니다.
+- **2.x에서 올릴 때:** 기존 stdio 등록은 `--stdio`가 없으면 연결되지 않습니다. HTTP로 전환하거나 `--stdio`를 추가하세요.
+
+설정 항목 전체, 상태 확인·중지 방법, 동작 원리는 [HTTP 상주 서버](docs/http-server.md)를 참고하세요.
 
 ## 기존 설치 업데이트
 
-이미 설치했다면 아래 프롬프트를 사용하세요. **사용 지침 MD만 바뀌면 저장소 갱신으로 충분**합니다. 프로젝트가 같은 로컬 MD 경로를 참조한다면 링크를 다시 추가할 필요가 없습니다. 프로그램이 바뀐 경우에는 새 실행 폴더에 publish한 뒤 MCP를 재연결합니다. 업데이트마다 전체 색인을 재생성하지 않습니다.
+이미 설치했다면 아래 프롬프트를 사용하세요. **사용 지침 MD만 바뀌면 저장소 갱신으로 충분**합니다. 프로젝트가 같은 로컬 MD 경로를 참조한다면 링크를 다시 추가할 필요가 없습니다. 프로그램이 바뀐 경우에는 새 실행 폴더에 publish한 뒤 HTTP 서버를 새 폴더로 다시 시작합니다(stdio는 MCP 재연결). 업데이트마다 전체 색인을 재생성하지 않습니다. **2.x에서 3.0으로 올릴 때는 기본 실행 방식이 HTTP로 바뀌므로** [2.x에서 옮기기](docs/http-server.md#2x에서-옮기기)를 따릅니다.
 
 ```text
 이 PC의 기존 SourceTrail MCP를 GitHub 최신 master 기준으로 업데이트해줘.
@@ -111,7 +185,7 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 2. 원격 master를 fetch하고 현재 커밋과 변경 범위를 비교한다.
    로컬 변경·분기된 이력은 덮어쓰거나 임의 reset/stash하지 않는다.
    문제가 없으면 fast-forward로 갱신한다. 충돌이 있으면 상태와 선택지를 설명하고 묻는다.
-3. 문서만 변경됐다면 프로그램 publish·MCP 재연결·색인 생성은 생략한다.
+3. 문서만 변경됐다면 프로그램 publish·서버 재시작·MCP 재연결·색인 생성은 생략한다.
    기존 프로젝트 지침의 MD 링크가 유효한지 확인한다.
    실제 사용 지침 문서가 읽히는 경로를 유지하고, 복사본을 쓰는 환경은
    사용자 작성 규칙을 보존하면서 SourceTrail 부분만 갱신한다.
@@ -124,12 +198,17 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 5. 기존 색인은 삭제하지 않고 재사용한다. 업데이트만을 이유로 prepare-index,
    --rebuild 또는 refresh를 실행하지 않는다. 캐시 형식 변경 등으로 준비가 실제로
    필요하면 이유를 확인하고 증분 준비를 우선한다. 기존 버전의 복구용 색인도 보존한다.
-6. publish 성공 후 기존 sourcetrail 등록의 DLL 경로만 새 폴더로 전환한다.
+6. publish 성공 후 실행 경로를 새 폴더로 전환한다.
+   HTTP 상주 서버: 기존 서버 설정(appsettings.json)을 새 폴더로 옮기고 자동 시작 항목의
+   DLL 경로를 바꾼 뒤 기존 서버를 멈추고 새 서버를 시작한다. 주소가 같으면 클라이언트 등록은 바꾸지 않는다.
+   2.x stdio 등록을 3.0으로 올리는 경우: HTTP 전환(권장) 또는 args에 --stdio 추가 중
+   무엇을 할지 사용자에게 먼저 묻는다. 그대로 두면 연결되지 않는다.
+   stdio 등록: 기존 sourcetrail 등록의 DLL 경로만 새 폴더로 바꾸고 --stdio를 유지한다.
    다른 MCP 등록은 변경하지 않고 중복 등록하지 않는다.
-   MCP를 재연결해 ping과 기존 분석 대상의 C# 선언 검색·SQL 객체 조회를 확인한다.
+   ping과 기존 분석 대상의 C# 선언 검색·SQL 객체 조회를 확인한다.
    현재 대화에서 재연결할 수 없으면 '전환 완료·검증 대기'로 구분하고
    필요한 재연결 방법을 알려준다. 검증 없이 업데이트 성공으로 단정하지 않는다.
-7. 새 버전 검증에 실패하면 이전 DLL 경로·설정으로 되돌려 재연결하고 복구를 확인한다.
+7. 새 버전 검증에 실패하면 이전 DLL 경로·설정으로 되돌려 서버를 다시 시작(또는 재연결)하고 복구를 확인한다.
    검증이 끝나기 전에는 이전 실행 폴더·복구용 설정·색인을 삭제하지 않는다.
 
 결과: 이전/이후 커밋, 문서만 갱신했는지 프로그램도 교체했는지,
@@ -161,16 +240,16 @@ SQL 스크립트 폴더(.sql 파일이 있는 폴더):
 
 ```text
 소스·SQL 경로 확인 → publish → 최초 일괄 색인 생성 → 파일로 저장
-→ MCP 등록 → 연결 → 실제 검색 검증
+→ 서버 설정·시작(자동 시작 등록) → 클라이언트에 주소 등록 → 연결 → 실제 검색 검증
 ```
 
-### MCP를 실행할 때
+### 서버를 시작할 때
 
 ```text
-MCP 실행 → 설정 읽기 → 분석 경로와 일치하는 활성 색인 선택 → 요청 대기
+서버 실행 → 설정 읽기 → 분석 경로와 일치하는 활성 색인 선택 → 127.0.0.1에서 요청 대기
 ```
 
-일괄 색인이 있어도 시작 즉시 모든 내용을 메모리에 읽지는 않습니다. 첫 관련 요청에서 파일 목록·캐시를 확인하고 필요한 색인을 메모리에 올립니다.
+일괄 색인이 있어도 시작 즉시 모든 내용을 메모리에 읽지는 않습니다. 서버가 받은 첫 관련 요청에서 파일 목록·캐시를 확인하고 필요한 색인을 메모리에 올립니다. 이후에는 어느 클라이언트의 요청이든 같은 메모리 색인을 재사용합니다.
 
 ```text
 첫 C# 선언 요청 → 파일 목록·메타데이터 대조 → 저장된 선언 재사용
@@ -230,7 +309,7 @@ dotnet .\artifacts\server\SourceTrail.Mcp.dll prepare-index
 
 C#·SQL의 메타데이터가 같으면 캐시를 재사용합니다. SQL은 변경 파일의 내용 해시를 비교해 실제 내용이 달라진 파일만 다시 파싱합니다. UI 입력이 달라지면 UI 색인 전체를 다시 생성합니다. 크기·시각을 모두 유지한 오프라인 수정은 메타데이터만으로 구분하지 못할 수 있으므로 전체 재생성으로 확인할 수 있습니다.
 
-### 완료·실패와 재연결
+### 완료·실패와 서버 재시작
 
 ```text
 별도 작업 세대에 생성 → 입력 변경 여부 재확인 → 완료된 세대를 활성화
@@ -239,7 +318,7 @@ C#·SQL의 메타데이터가 같으면 캐시를 재사용합니다. SQL은 변
 
 결과에는 `Published`, 생성·재사용 건수, 구문 진단·SQL 경고, 단계별 시간이 나옵니다. CLI 종료 코드는 완료 0, 실패 1, 취소 130입니다. `Published=true`여도 구문 진단이나 SQL `Partial` 경고를 확인해야 합니다. 모든 객체나 실행 관계의 완전성을 뜻하지 않습니다.
 
-기존 활성 색인을 먼저 지우지 않습니다. 이전 세대는 실행 중인 MCP가 참조할 수 있어 자동 삭제하지 않으며, 재생성에는 추가 디스크 공간이 필요합니다. **새 세대를 사용하려면 MCP를 재연결합니다. 재연결 때문에 색인을 다시 만들 필요는 없습니다.**
+기존 활성 색인을 먼저 지우지 않습니다. 이전 세대는 실행 중인 MCP가 참조할 수 있어 자동 삭제하지 않으며, 재생성에는 추가 디스크 공간이 필요합니다. **새 세대를 사용하려면 HTTP 서버를 다시 시작합니다(stdio는 MCP 재연결). 재시작·재연결 때문에 색인을 다시 만들 필요는 없습니다.**
 
 원본 SQL 정의와 소스 선언이 캐시에 포함되므로 로컬 캐시를 공개 저장소에 올리지 마세요. 큰 프로젝트에서는 선언 캐시의 크기·메모리 로딩 비용이 커질 수 있습니다. [세부 동작과 반환값](docs/index-preparation.md)
 
@@ -300,6 +379,21 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 
 ## 성능 측정의 범위
 
+### 3.0 공유 서버 확인
+
+2026-11-23에 HTTP 서버 하나에 클라이언트 세 개를 붙여 같은 프로세스와 메모리 색인을 공유하는지 확인했습니다. 대상은 실제 업무 솔루션(C# 파일 6,707개, SQL 1,889개)과 미리 생성한 일괄 색인입니다. 각 1회 관측이며 OS 캐시는 초기화하지 않았습니다.
+
+| 호출 | 응답 시간 |
+|---|---:|
+| 클라이언트 A의 첫 C# 선언 조회 (서버의 C# 색인 메모리 적재 포함) | 4.044초 |
+| 클라이언트 B의 같은 조회 | 0.184초 |
+| 나중에 접속한 클라이언트 C의 다른 C# 선언 조회 | 0.156초 |
+| 클라이언트 B의 첫 SQL 객체 조회 / 이후 클라이언트 A의 같은 조회 | 0.640초 / 0.002초 |
+
+실행 중인 서버 프로세스는 1개였고, 두 클라이언트의 동시 호출은 결과가 섞이지 않고 차례대로 처리됐습니다(서버 시작 직후 첫 전체 문자열 검색이 끝날 때까지 다른 호출이 대기). stdio에서는 클라이언트·대화마다 프로세스가 따로 떠 같은 첫 적재 비용을 각각 냅니다.
+
+### 2.0.1 검증
+
 2026-11-20에 2.0.1의 텍스트 검색과 고정 조회 작업을 검증했습니다. 두 비교의 기준은 다릅니다. 아래는 첫 유효 실행을 제외한 각 3회 중앙값이며, OS 캐시는 초기화하지 않았습니다.
 
 ### 텍스트 검색 수정 전후
@@ -328,6 +422,7 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 선언·참조·DB 명령은 파일·구문 기반 후보입니다. 오버로드·수신 타입·런타임 분기·실제 endpoint와 DB 배포를 자동으로 확정하지 않습니다. `Ready`는 색인/검색 준비 상태이며 컴파일 성공이 아닙니다. 전체 그래프·자동 WCF 연결·LiveDatabase는 2.0에서 제거했습니다.
 
 - [도구와 반환 의미](docs/tools.md)
+- [HTTP 상주 서버 — 실행·자동 시작·제한·2.x에서 옮기기](docs/http-server.md)
 - [MCP 등록·설정 — Codex / Claude Code](docs/mcp-registration.md)
 - [일괄 색인 상세](docs/index-preparation.md)
 - [구조와 캐시](docs/architecture.md)
@@ -344,7 +439,7 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 dotnet publish src/SourceTrail.Mcp/SourceTrail.Mcp.csproj -c Release -o artifacts/server
 ```
 
-MCP에는 `dotnet`과 생성된 DLL 절대 경로를 등록합니다. publish 폴더 전체를 유지하고, 이 README의 일괄 준비 명령을 실행한 뒤 같은 경로 설정으로 연결하세요.
+publish 폴더 전체를 유지합니다. 이 README의 일괄 준비 명령을 실행한 뒤, DLL 옆 `appsettings.json`에 같은 경로 설정을 두고 서버를 시작합니다(`dotnet <publish 폴더>\SourceTrail.Mcp.dll`). 클라이언트에는 `http://127.0.0.1:3920/mcp`를 등록합니다. stdio로 쓰려면 `dotnet`과 DLL 절대 경로, `--stdio`를 등록합니다.
 
 개발 검증은 합성 C#·WinForms·SQL fixture를 사용하며 운영 DB에 접속하지 않습니다.
 

@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -31,58 +33,118 @@ internal static class Program
                 Console.Out, Console.Error, cancellation.Token);
             return;
         }
+
+        args = ServerOptions.NormalizeArguments(args);
+        ServerOptions server;
+        try { server = ReadServerOptions(args); }
+        catch (ArgumentException error)
+        {
+            Console.Error.WriteLine($"SourceTrail MCP configuration error: {error.Message}");
+            Environment.ExitCode = 2;
+            return;
+        }
+        if (server.UsesHttp)
+            await RunHttpAsync(args, server);
+        else
+            await RunStdioAsync(args, server);
+    }
+
+    // 기본: 한 번 띄운 상주 프로세스를 여러 MCP 클라이언트가 HTTP로 함께 사용한다.
+    private static async Task RunHttpAsync(string[] args, ServerOptions server)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
+        ConfigureSources(builder.Configuration, args);
+        ConfigureLogging(builder.Logging);
+        RegisterServices(builder.Services, builder.Configuration, server);
+        builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
+        builder.WebHost.UseUrls(server.Url);
+
+        await using var app = builder.Build();
+        app.MapMcp(server.Path);
+        var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
+        using var measurements = AnalysisTelemetry.Listen(message => startupLogger.LogInformation("{Measurement}", message));
+        startupLogger.LogInformation("SourceTrail MCP starting (HTTP) at {Url}{Path}. Target changes allowed: {Allowed}.",
+            server.Url.TrimEnd('/'), server.Path, server.TargetChangesAllowed);
+        await app.RunAsync();
+    }
+
+    // 선택: 클라이언트가 직접 실행하는 1:1 stdio 프로세스(--stdio).
+    private static async Task RunStdioAsync(string[] args, ServerOptions server)
+    {
         var builder = CreateBuilder(args);
-        RegisterServices(builder);
+        RegisterServices(builder.Services, builder.Configuration, server);
+        builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();
 
         using var host = builder.Build();
         var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");
         using var measurements = AnalysisTelemetry.Listen(message => startupLogger.LogInformation("{Measurement}", message));
-        startupLogger.LogInformation("SourceTrail MCP starting.");
+        startupLogger.LogInformation("SourceTrail MCP starting (stdio).");
         await host.RunAsync();
+    }
+
+    private static ServerOptions ReadServerOptions(string[] args)
+    {
+        var configuration = new ConfigurationBuilder();
+        ConfigureSources(configuration, args);
+        var server = configuration.Build().GetSection("Server").Get<ServerOptions>() ?? new();
+        server.Validate();
+        return server;
     }
 
     // 실행한 작업 폴더와 무관하게 서버 DLL 옆의 설정을 읽고 로그는 stderr로 보낸다.
     private static HostApplicationBuilder CreateBuilder(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
-        // Resolve configuration next to the executable, independent of the MCP client's working directory.
-        builder.Configuration.Sources.Clear();
-        builder.Configuration
+        ConfigureSources(builder.Configuration, args);
+        ConfigureLogging(builder.Logging);
+        return builder;
+    }
+
+    // Resolve configuration next to the executable, independent of the MCP client's working directory.
+    private static void ConfigureSources(IConfigurationBuilder configuration, string[] args)
+    {
+        configuration.Sources.Clear();
+        configuration
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true)
             .AddEnvironmentVariables()
             .AddCommandLine(args);
-        builder.Logging.ClearProviders();
-        builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+    }
 
-        return builder;
+    private static void ConfigureLogging(ILoggingBuilder logging)
+    {
+        logging.ClearProviders();
+        logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
     }
 
     // 분석기는 Singleton으로 등록해 도구 호출 간 작업 공간과 색인을 재사용한다.
-    private static void RegisterServices(HostApplicationBuilder builder)
+    // HTTP 모드에서는 연결된 모든 클라이언트가 같은 인스턴스와 실행 게이트를 공유한다.
+    private static void RegisterServices(IServiceCollection services, IConfiguration configuration, ServerOptions server)
     {
-        var analysisOptions = builder.Configuration.GetSection("Analysis").Get<AnalysisOptions>() ?? new();
-        var databaseOptions = builder.Configuration.GetSection("Database").Get<DatabaseOptions>() ?? new();
-        var indexOptions = builder.Configuration.GetSection("Indexing").Get<IndexPreparationOptions>() ?? new();
+        var analysisOptions = configuration.GetSection("Analysis").Get<AnalysisOptions>() ?? new();
+        var databaseOptions = configuration.GetSection("Database").Get<DatabaseOptions>() ?? new();
+        var indexOptions = configuration.GetSection("Indexing").Get<IndexPreparationOptions>() ?? new();
         IndexPreparationService.ApplyActive(analysisOptions, databaseOptions, indexOptions);
-        builder.Services.AddSingleton(analysisOptions);
-        builder.Services.AddSingleton(databaseOptions);
-        builder.Services.AddSingleton(indexOptions);
-        builder.Services.AddSingleton<IndexPreparationService>();
-        builder.Services.AddSingleton<ICodeAnalyzer>(services =>
+        services.AddSingleton(server);
+        services.AddSingleton(analysisOptions);
+        services.AddSingleton(databaseOptions);
+        services.AddSingleton(indexOptions);
+        services.AddSingleton<IndexPreparationService>();
+        services.AddSingleton<ICodeAnalyzer>(provider =>
         {
-            var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Roslyn");
+            var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("Roslyn");
             return new RoslynAnalyzer(analysisOptions, message => logger.LogInformation("{Diagnostic}", message));
         });
-        builder.Services.AddSingleton<DatabaseAnalyzer>(services =>
+        services.AddSingleton<DatabaseAnalyzer>(provider =>
         {
-            var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("SqlServer");
+            var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("SqlServer");
             return new DatabaseAnalyzer(databaseOptions, message => logger.LogWarning("{Diagnostic}", message));
         });
-        builder.Services.AddSingleton<IProcedureAnalyzer>(services => services.GetRequiredService<DatabaseAnalyzer>());
-        builder.Services.AddSingleton(new SemaphoreSlim(1, 1));
-        builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();
-
+        services.AddSingleton<IProcedureAnalyzer>(provider => provider.GetRequiredService<DatabaseAnalyzer>());
+        services.AddSingleton(new SemaphoreSlim(1, 1));
     }
-
 }
