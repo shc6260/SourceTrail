@@ -233,12 +233,12 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
         return matches.Length switch { 1 => matches[0], 0 => throw new ArgumentException("Declaration not found; use find_symbol first."),
             _ => throw new ArgumentException("Ambiguous declaration; pass the exact source ID returned by find_symbol.") };
     }
-    public async Task<SymbolOverview> OverviewAsync(string symbolOrFile, CancellationToken token)
+    public async Task<SymbolOverview> OverviewAsync(string symbolOrFile, CancellationToken token, string? memberQuery = null)
     {
         await _gate.WaitAsync(token);
         try
         {
-            SymbolInfo[] items;
+            SymbolInfo[] items; SymbolInfo? ownerType = null;
             if (Path.IsPathFullyQualified(symbolOrFile) && File.Exists(symbolOrFile))
             {
                 var file = ResolveSolutionPath(GetSolutionRoot(), symbolOrFile);
@@ -249,19 +249,46 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
                 items = (await EnsureParsedAsync(file, token)).Symbols;
                 await PersistParsedAsync(token);
             }
-            else { RequireIndex(); var owner = Resolve(symbolOrFile); items = _indexedSymbols.Where(s => s.Id == owner.Id || s.ContainingType == owner.FullName).ToArray(); }
+            else { RequireIndex(); var owner = Resolve(symbolOrFile); ownerType = owner; items = _indexedSymbols.Where(s => s.Id == owner.Id || s.ContainingType == owner.FullName).ToArray(); }
             var types = items.Where(s => s.SymbolKind is "Class" or "Struct" or "Interface" or "Enum" or "Record").ToArray();
             var baseTypes = new List<string>();
             foreach (var type in types)
                 if (await BaseListAsync(type, token) is { Length: > 0 } bases) baseTypes.Add(type.FullName + " : " + string.Join(", ", bases));
+            var warnings = baseTypes.Count == 0 ? Warnings() : Warnings().Append("Members inherited from BaseTypes are not listed; query find_symbol with 'BaseType.Member' or 'Type.Member'.").ToArray();
+            // Derived types are looked up for one type: the requested type ID, or the only type declared in the file.
+            var derivedFrom = ownerType is { SymbolKind: "Class" or "Struct" or "Interface" or "Record" } ? ownerType : ownerType is null && types.Length == 1 ? types[0] : null;
+            var derived = derivedFrom is null ? [] : await DerivedTypesAsync(derivedFrom, token);
+            if (derived.Length > 0) warnings = warnings.Append("DerivedTypes are types whose source base list names this type by simple name; not bound, so same-named types in other namespaces can appear.").ToArray();
+            bool Member(SymbolInfo s) => string.IsNullOrWhiteSpace(memberQuery) || s.Name.Contains(memberQuery.Trim(), StringComparison.OrdinalIgnoreCase);
             return new(types,
-                items.Where(s => s.SymbolKind == "Field").ToArray(), items.Where(s => s.SymbolKind == "Property").ToArray(),
-                items.Where(s => s.SymbolKind == "Method").ToArray(), items.Where(s => s.SymbolKind == "Constructor").ToArray(),
-                items.Where(s => s.SymbolKind == "Event").ToArray(), _state.SnapshotId,
-                baseTypes.Count == 0 ? Warnings() : Warnings().Append("Members inherited from BaseTypes are not listed; query find_symbol with 'BaseType.Member' or 'Type.Member'.").ToArray())
-                { BaseTypes = baseTypes.Count == 0 ? null : baseTypes };
+                items.Where(s => s.SymbolKind == "Field" && Member(s)).ToArray(), items.Where(s => s.SymbolKind == "Property" && Member(s)).ToArray(),
+                items.Where(s => s.SymbolKind == "Method" && Member(s)).ToArray(), items.Where(s => s.SymbolKind == "Constructor" && Member(s)).ToArray(),
+                items.Where(s => s.SymbolKind == "Event" && Member(s)).ToArray(), _state.SnapshotId, warnings)
+                { BaseTypes = baseTypes.Count == 0 ? null : baseTypes, DerivedTypes = derived.Length == 0 ? null : derived };
         }
         finally { _gate.Release(); }
+    }
+    // Types naming this type in their base list. Only .cs files that contain the type name (ripgrep, then a managed check) are parsed.
+    private async Task<DerivedTypeInfo[]> DerivedTypesAsync(SymbolInfo type, CancellationToken token)
+    {
+        var derived = new List<DerivedTypeInfo>();
+        var candidates = await SourceCandidatesAsync(type.Name, token);
+        foreach (var catalogFile in _sourceFiles.ToArray())
+        {
+            if (candidates.Skip(catalogFile.File)) continue;
+            if (!(await File.ReadAllTextAsync(catalogFile.File, token)).Contains(type.Name, StringComparison.Ordinal)) continue;
+            var file = await EnsureParsedAsync(catalogFile.File, token, updateSymbols: false);
+            var root = await RootAsync(file, token, updateSymbols: false);
+            foreach (var declaration in root.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
+            {
+                if (declaration.BaseList is null || !declaration.BaseList.Types.Any(@base => SimpleTypeName(@base.Type.ToString()) == type.Name)) continue;
+                var id = SourceId(file.File, file.Hash, declaration.SpanStart);
+                if (id != type.Id) derived.Add(new(id, TypeName(declaration), file.File, Line(declaration)));
+            }
+        }
+        RefreshIndexedSymbols();
+        await PersistParsedAsync(token);
+        return derived.OrderBy(item => item.Name, StringComparer.Ordinal).ThenBy(item => item.File, StringComparer.OrdinalIgnoreCase).ToArray();
     }
     public async Task<Page<ReferenceInfo>> ReferencesAsync(string symbol, int offset, int limit, CancellationToken token)
     {

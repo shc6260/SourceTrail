@@ -5,12 +5,14 @@ using ModelContextProtocol.Server;
 using SourceTrail.Core.Contracts;
 using SourceTrail.Core;
 using SourceTrail.Core.Models;
+using SourceTrail.SqlServer.Metadata;
 
 namespace SourceTrail.Mcp.Tools;
 
 [McpServerToolType]
 public sealed class AnalysisTools(ICodeAnalyzer code,
-    ILogger<AnalysisTools> logger, AnalysisOptions options, SemaphoreSlim executionGate, ServerOptions server)
+    ILogger<AnalysisTools> logger, AnalysisOptions options, SemaphoreSlim executionGate, ServerOptions server,
+    DatabaseAnalyzer? database = null)
 {
     [McpServerTool(Name = "load_solution", ReadOnly = true, Destructive = false), Description("Indexes an existing absolute source folder or .sln directory using files and C# syntax only. No compiler, MSBuild, project evaluation or reference DLL loading. Returns source-index state; CompilationErrors is not evaluated. Disabled on the shared HTTP server unless Server:AllowTargetChanges=true, because it changes the target for every client.")]
     public Task<SolutionState> LoadSolution(string solutionPath, CancellationToken cancellationToken)
@@ -30,11 +32,11 @@ public sealed class AnalysisTools(ICodeAnalyzer code,
     public Task<Page<SymbolInfo>> FindSymbol(string query, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_symbol", () => code.FindSymbolsAsync(query, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "get_symbol_overview", ReadOnly = true, Destructive = false), Description("Returns type/member structure without source bodies. symbol accepts an exact type ID or an absolute file path. By default each member has only id, name, symbolKind, line and signature (file is stated once, and per member only when it differs); set detail=true for the full declaration records (namespace, fullName, project, file, containingType, isUi).")]
-    public Task<object> GetSymbolOverview(string symbol, CancellationToken cancellationToken, bool detail = false) =>
+    [McpServerTool(Name = "get_symbol_overview", ReadOnly = true, Destructive = false), Description("Returns type/member structure without source bodies. symbol accepts an exact type ID or an absolute file path. By default each member has only id, name, symbolKind, line and signature (file is stated once, and per member only when it differs); set detail=true for the full declaration records (namespace, fullName, project, file, containingType, isUi). baseTypes lists the parents written in source; derivedTypes lists types (id, name, file, line) whose source base list names this type, matched by simple name from syntax only (returned when symbol is a type ID or a file that declares one type). memberQuery keeps only members whose name contains the text (case-insensitive); types are not filtered.")]
+    public Task<object> GetSymbolOverview(string symbol, CancellationToken cancellationToken, bool detail = false, string? memberQuery = null) =>
         Run<object>(cancellationToken, "get_symbol_overview", async () =>
         {
-            var overview = await code.OverviewAsync(symbol, cancellationToken);
+            var overview = await code.OverviewAsync(symbol, cancellationToken, memberQuery);
             return detail ? overview : overview.ToBrief();
         }, requiresCode: !Path.IsPathFullyQualified(symbol));
 
@@ -59,9 +61,25 @@ public sealed class AnalysisTools(ICodeAnalyzer code,
         Run(cancellationToken, "find_ui_actions",
             () => ((IUiActionAnalyzer)code).FindUiActionsAsync(query, limit, cancellationToken), requiresCode: false);
 
-    [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Finds procedure-name string literals and containing source declarations. All matches are candidates; comments are excluded and execution is not inferred.")]
-    public Task<Page<ProcedureUsage>> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
-        Run(cancellationToken, "find_procedure_usage", () => code.ProcedureUsagesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken));
+    [McpServerTool(Name = "find_procedure_usage", ReadOnly = true, Destructive = false), Description("Finds procedure-name string literals and containing source declarations. All matches are candidates; comments are excluded and execution is not inferred. sqlCallers lists the SQL procedures that EXEC this procedure (name, kind, file, line) from the SQL index, with the same offset/limit; if the SQL index is unavailable only a warning is added.")]
+    public Task<ProcedureUsagePage> FindProcedureUsage(string procedure, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
+        Run(cancellationToken, "find_procedure_usage", async () =>
+        {
+            var page = await code.ProcedureUsagesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken);
+            IReadOnlyList<SqlReferenceSite> callers = []; int callerTotal = 0; var warnings = page.Warnings;
+            try
+            {
+                if (database is null) throw new InvalidOperationException("SQL index is not configured.");
+                var sql = await database.FindReferencesAsync(procedure, offset, limit ?? options.MaxResults, cancellationToken, "EXEC");
+                callers = sql.Items; callerTotal = sql.Total;
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                logger.LogWarning("find_procedure_usage SQL callers unavailable ({ErrorType}).", error.GetType().Name);
+                warnings = warnings.Append("SQL callers unavailable: " + (error is InvalidOperationException or ArgumentException ? error.Message : error.GetType().Name)).ToArray();
+            }
+            return new ProcedureUsagePage(page.Items, page.Total, page.Offset, page.Limit, page.Truncated, page.SnapshotId, warnings, callers, callerTotal);
+        });
 
     [McpServerTool(Name = "find_database_calls", ReadOnly = true, Destructive = false), Description("Returns DB command/configuration candidates and direct method-call keywords from ONE method, using source syntax only. Does not recursively traverse calls, bind receivers/overloads or infer WCF dispatch. Adapter names and row-state configurations are candidates. Read returned source and search the next method explicitly. No DB connection.")]
     public Task<DatabaseCallSummary> FindDatabaseCalls(string symbol, CancellationToken cancellationToken, int limit = 20) =>

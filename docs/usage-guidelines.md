@@ -12,6 +12,9 @@ SourceTrail을 사용하는 조사에서 필요한 항목만 적용한다. 프�
 | 화면 문구·목록 항목 | 알려진 폴더·확장자로 좁힌 `search_text` |
 | C# 파일·식별자 | 필요한 원문을 읽고 `get_symbol_overview` 또는 `find_symbol` |
 | 프로시저 이름 | `find_sql_object`, 필요한 경우 `analyze_procedure` |
+| 프로시저를 부르는 곳 | `find_procedure_usage` (C# 후보와 `sqlCallers` SQL 호출처를 함께 반환) |
+| 테이블·뷰를 쓰거나 읽는 SQL | `find_sql_references` (INSERT/UPDATE/DELETE/SELECT/EXEC 구분) |
+| 클래스의 상속 관계 | `find_symbol`로 선언 ID를 얻은 뒤 `get_symbol_overview`의 `baseTypes`·`derivedTypes` |
 
 ## 조회 순서
 
@@ -25,7 +28,7 @@ SourceTrail을 사용하는 조사에서 필요한 항목만 적용한다. 프�
 ## 도구별 주의사항
 
 - `find_symbol`: 확인한 식별자·전체 이름을 전달한다. 반환된 소스 ID는 그대로 후속 호출에 사용한다. 파일명 우선 범위 경고가 있으면 전체 선언을 찾았다고 단정하지 않는다.
-- `get_symbol_overview`: 이미 알고 있는 C# 파일 절대 경로를 사용할 수 있다.
+- `get_symbol_overview`: 이미 알고 있는 C# 파일 절대 경로를 사용할 수 있다. 상속 클래스(`derivedTypes`)는 타입 선언 ID로 호출할 때 나온다. 멤버가 많으면 `memberQuery`로 이름을 좁힌다.
 - `search_text`: 코드의 실제 문자열을 사용하고 알려진 `directory`와 허용 `extension`으로 좁힌다. 일반 텍스트 검색에 화면·동작을 임의로 붙인 `접수저장` 같은 조합어를 넣지 않는다.
 - `find_database_calls`: 선택한 메서드 하나만 `symbol`과 `limit`으로 조회한다. `maxDepth`/`maxMethods`와 자동 전체 그래프 추적은 사용하지 않는다. `methodCandidates`와 원문에서 다음 호출을 선택한다. 명령 설정·Adapter 매핑은 실행 증거가 아닌 후보다.
 - `find_reference_candidates`: 추가 사용처 조사가 필요한 목적·범위를 먼저 설명하고 묻는다. 이름 사용처 후보를 실제 심볼 참조·오버로드 바인딩으로 단정하지 않는다.

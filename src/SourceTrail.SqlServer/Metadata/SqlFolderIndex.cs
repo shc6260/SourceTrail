@@ -10,8 +10,7 @@ public sealed class SqlFolderIndex(DatabaseOptions options) : IDisposable
 {
     // 파서/모델 의미가 바뀌면 캐시 버전을 올린다. 분석기 객체 자체는 저장하지 않는다.
     private string CacheDirectory => string.IsNullOrWhiteSpace(options.CacheDirectory) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SourceTrail", "cache") : options.CacheDirectory;
-    private const string Version = "sql-index-4-stamps";
-    private const string PreviousVersion = "sql-index-3-scriptdom180";
+    private const string Version = "sql-index-5-alias-targets";
     public sealed record FileStamp(long Length, long LastWriteTicks, long CreationTicks);
     public sealed record CachedFile(string Hash, SqlFileObject[] Objects, string[] Warnings, FileStamp? Stamp = null);
     public sealed record Cache(string Version, string Folder, Dictionary<string, CachedFile> Files);
@@ -185,7 +184,7 @@ public sealed class SqlFolderIndex(DatabaseOptions options) : IDisposable
                 if (File.Exists(cachePath))
                 {
                     var cache = JsonSerializer.Deserialize<Cache>(await File.ReadAllTextAsync(cachePath, token));
-                    if (cache is not null && (cache.Version == Version || cache.Version == PreviousVersion) && string.Equals(cache.Folder, folder, StringComparison.OrdinalIgnoreCase))
+                    if (cache is not null && cache.Version == Version && string.Equals(cache.Folder, folder, StringComparison.OrdinalIgnoreCase))
                         previous = new(cache.Files, StringComparer.OrdinalIgnoreCase);
                 }
             }

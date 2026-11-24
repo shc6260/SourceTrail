@@ -27,7 +27,7 @@ public sealed class PerformanceRegressionTests
         public Task<SolutionState> LoadAsync(string path, CancellationToken token) => Task.FromResult(Status());
         public Task<SolutionState> ReloadAsync(CancellationToken token) => Task.FromResult(Status());
         public Task<Page<SymbolInfo>> FindSymbolsAsync(string q, int o, int l, CancellationToken t) => throw new NotSupportedException();
-        public Task<SymbolOverview> OverviewAsync(string s, CancellationToken t) => throw new NotSupportedException();
+        public Task<SymbolOverview> OverviewAsync(string s, CancellationToken t, string? memberQuery = null) => throw new NotSupportedException();
         public Task<Page<ReferenceInfo>> ReferencesAsync(string s, int o, int l, CancellationToken t) => throw new NotSupportedException();
         public Task<Page<EventHandlerMatch>> FindEventHandlersAsync(string f, string? q, int o, int l, CancellationToken t) => throw new NotSupportedException();
         public Task<Page<TextMatch>> SearchTextAsync(string s, int o, int l, CancellationToken t, string? directory = null, string? extension = null) => Task.FromResult(new Page<TextMatch>([], 0, o, l, false, null, []));

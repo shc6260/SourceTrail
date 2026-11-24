@@ -84,7 +84,7 @@ public sealed class RipgrepTextSearchTests
         Assert.Equal(all.Items.Skip(1).Take(2), page.Items);
         var empty = await native.SearchTextAsync("absent-value-917032", 0, 5, default);
         Assert.Empty(empty.Items); Assert.Equal(0, empty.Total);
-        Assert.Contains(messages, message => message.StartsWith("Text search engine: ripgrep candidates"));
+        Assert.Contains(messages, message => message.StartsWith("Text search engine: ripgrep lines"));
         Assert.DoesNotContain(messages, message => message.Contains(query));
     }
 

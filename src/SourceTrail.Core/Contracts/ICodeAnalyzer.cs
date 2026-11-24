@@ -8,7 +8,7 @@ public interface ICodeAnalyzer : IDisposable
     SolutionState Status();
     Task<SolutionState> ReloadAsync(CancellationToken cancellationToken);
     Task<Page<SymbolInfo>> FindSymbolsAsync(string query, int offset, int limit, CancellationToken cancellationToken);
-    Task<SymbolOverview> OverviewAsync(string symbolOrFile, CancellationToken cancellationToken);
+    Task<SymbolOverview> OverviewAsync(string symbolOrFile, CancellationToken cancellationToken, string? memberQuery = null);
     Task<Page<ReferenceInfo>> ReferencesAsync(string symbol, int offset, int limit, CancellationToken cancellationToken);
     Task<Page<TextMatch>> SearchTextAsync(string text, int offset, int limit, CancellationToken cancellationToken,
         string? directory = null, string? extension = null);

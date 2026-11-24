@@ -12,31 +12,43 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 | get_analysis_status / reload_solution | 마지막 소스 색인 상태 / 파일 변경 대조 |
 | find_ui_actions | query: 접수 저장 또는 접수저장, limit 기본 5 |
 | find_event_handlers | file: C#·Designer 경로, query: 버튼·핸들러명 |
-| search_text | text: 원문 문자열, directory: 알려진 폴더, extension: .cs·.Designer.cs·.config·.xml·.sql |
+| search_text | text: 원문 문자열, directory: 알려진 폴더, extension: .cs·.Designer.cs·.config·.xml·.sql. 줄·열·미리보기는 ripgrep이 찾은 줄에서 바로 만듭니다 |
 | find_symbol | query: 식별자·전체 선언명, offset/limit. 기본 20건 |
-| get_symbol_overview | symbol: 소스 ID 또는 절대 C# 파일, detail(기본 false). 기본은 멤버별 id·name·symbolKind·line·signature만, detail=true는 전체 선언 정보 |
+| get_symbol_overview | symbol: 소스 ID 또는 절대 C# 파일, detail(기본 false), memberQuery(선택). 기본은 멤버별 id·name·symbolKind·line·signature만, detail=true는 전체 선언 정보. memberQuery는 멤버 이름 부분 일치(대소문자 무시)로 거름. derivedTypes는 이 타입을 소스 부모로 적은 타입(id·name·file·line) |
 | find_reference_candidates | symbol: 선언 ID. 같은 이름의 구문상 사용 후보 |
-| find_procedure_usage | procedure: SQL 이름. 문자열 리터럴 후보, IsVerifiedCall=false |
+| find_procedure_usage | procedure: SQL 이름. C# 문자열 리터럴 후보(IsVerifiedCall=false)와, 이 프로시저를 EXEC하는 SQL 프로시저·위치(sqlCallers, 같은 offset/limit) |
 | find_database_calls | symbol: 메서드 ID·전체 이름, limit 기본 20. 현재 메서드 DB 후보와 methodCandidates |
 | select_database_source | mode: SqlFiles, sqlFolder: 로컬 SQL 폴더 절대 경로. HTTP 공유 서버에서는 기본 차단 |
 | get_database_status / refresh_database_source | SQL 색인 상태 / 파일 변경 대조 |
+| find_sql_references | name(테이블·뷰·프로시저·함수, `dbo.`·대괄호 유무 무시), limit 기본 30, offset. 이 객체를 참조하는 SQL 객체와 동작(INSERT·UPDATE·DELETE·MERGE·EXEC·SELECT·ForeignKey), 파일·줄. 대상 정의 스크립트가 없어도 참조 이름으로 찾음 |
 | find_sql_object | query, offset/limit, locationsOnly 또는 includeDefinition. 이름이 정확히 같은 객체가 있으면 그것만 반환하고 나머지 부분 일치 수는 경고로 알림 |
 | analyze_procedure | procedure, includeDefinition. SQL 정의 출처와 직접 참조 |
 
 ## 검색 범위와 반환 의미
 
-- `search_text`는 기본적으로 로컬 ripgrep으로 후보 파일을 찾고 해당 파일을 .NET으로 읽어 실제 줄·열·미리보기를 검증합니다. 숨김·gitignore 파일을 포함하고 기존 제외 폴더·확장자·원문 읽기 규칙을 유지합니다. UTF-16/UTF-32 BOM 파일도 기존 읽기로 확인합니다. 전체 결과에서 offset/limit을 적용하므로 limit은 검색 조기 종료가 아닙니다.
+- `search_text`는 기본적으로 로컬 ripgrep이 찾은 줄을 그대로 결과로 씁니다(파일을 다시 읽지 않음). 줄 번호는 ripgrep의 줄, 열·미리보기는 그 줄 텍스트에서 기존 규칙(대소문자 무시 첫 위치, 240자)으로 만듭니다. UTF-16 BOM 파일은 ripgrep이 직접 디코드합니다. UTF-32 BOM 파일과 줄바꿈이 CR만 있는 파일, 대소문자가 있는 비ASCII 문자(é, Σ 등)를 포함한 검색어는 기존처럼 .NET이 읽어 확인합니다. 숨김·gitignore 파일을 포함하고 기존 제외 폴더·확장자 규칙을 유지합니다. 전체 결과에서 offset/limit을 적용하므로 limit은 검색 조기 종료가 아닙니다.
 - rg가 없거나 실행 오류·30초 대기 제한이 발생하면 기존 검색으로 대체합니다. 사용자 취소는 대체 검색을 시작하지 않습니다. 검색 엔진·대체 여부와 `text.ripgrep`/`text.scan` 구간은 서버 로그에서 확인합니다. 설정은 [MCP 등록 및 설정](mcp-registration.md)을 참고하세요.
 - 전체 이름은 일치하는 파일명을 우선합니다. 범위를 끝까지 검색하지 않은 경우 경고를 반환하며 추가 선언이 없다는 뜻이 아닙니다. 미발견 시 소스 후보 범위를 넓힙니다. 광범위 문자열·이름 참조 검색은 큰 폴더에서 오래 걸릴 수 있습니다.
 - CommandConfiguration은 현재 메서드에서 이름이 설정됐다는 뜻입니다. 미사용 변수·조건 분기·나중 변경을 원문에서 확인합니다.
 - AdapterCommandCandidate는 이름·파일명이 일치하는 Adapter의 행 상태 설정입니다. 실제 타입·상속·전달 행 상태는 확인 필요입니다. 파일명으로 찾지 못하면 `class <Adapter>` 텍스트 검색으로 Adapter 파일을 찾습니다. 그래도 찾지 못한 Adapter는 unresolved로 남깁니다.
 - AdapterSqlCandidate는 Adapter가 저장 프로시저 대신 SQL문(`INSERT INTO 테이블` 등)을 직접 설정한 경우입니다. 대상에는 명령과 테이블만 적습니다.
 - `find_symbol`은 이름이 정확히 같은 선언이 있으면 그것만 반환하고, 이름 일부만 맞은 선언은 개수만 경고로 알립니다. `타입.멤버`가 0건이면 소스에 적힌 부모 타입을 최대 4단계까지 따라가 찾고 경고로 표시합니다. 부모 타입은 구문으로만 읽으며 실제 바인딩은 확인 필요입니다.
-- `get_symbol_overview`의 baseTypes는 소스에 적힌 부모 타입입니다. 상속받은 멤버는 목록에 없습니다.
+- `get_symbol_overview`의 baseTypes는 소스에 적힌 부모 타입입니다. 상속받은 멤버는 목록에 없습니다. derivedTypes는 반대로 이 타입 이름을 부모 목록에 적은 타입이며, 단순 이름으로만 맞추므로 다른 네임스페이스의 같은 이름 타입이 섞일 수 있습니다. 타입 ID(또는 타입이 하나인 파일)로 호출할 때만 조회합니다.
+- `find_sql_references`의 동작은 SQL 구문에서 읽은 증거입니다. SELECT는 FROM·JOIN 읽기 후보입니다. `UPDATE a ... FROM 테이블 a`·`DELETE a FROM 테이블 AS a`처럼 별칭이 대상이면 같은 문장의 FROM에서 실제 테이블을 찾아 UPDATE/DELETE로 분류하고 그 문장의 SELECT 중복은 남기지 않습니다(다른 별칭으로 JOIN한 같은 테이블은 SELECT로 남음). 대상이 CTE·임시 테이블이면 그 이름으로 기록하고 테이블 변수는 기록하지 않습니다. 별칭을 확정하지 못한 경우에만 경고가 붙습니다. 동적 SQL·실행 경로는 판단하지 않으며, 동작을 구분하지 못하면 Unknown과 경고를 반환합니다. 같은 객체가 여러 줄에서 참조하면 줄마다 한 건입니다.
 - `find_ui_actions`는 일부 단어가 어느 화면에도 없어도 나머지 단어로 후보를 찾고, 쓰이지 않은 단어를 unmatchedTerms로 돌려줍니다. 동작 단어(저장·수정 등)는 반드시 버튼·핸들러와 맞아야 합니다. 두 글자 이상 한글 단어는 화면 제목·메뉴·버튼 문구의 합성어 안에서도 찾지만(결과 ⊂ 결과입력) 낱말 전체가 맞은 화면보다 뒤에 둡니다.
 - methodCandidates의 다음 호출명을 선택해 선언·원문 검색을 이어갑니다. 자동 재귀 탐색은 하지 않습니다.
 - 후보 목록이 limit에 걸리면 truncated를 확인하고 범위를 좁히거나 한도를 조정합니다.
 - locationsOnly와 includeDefinition을 동시에 사용할 수 없습니다. SQL은 로컬 파일만 읽습니다.
+
+## 3.4 변경
+
+동작 유형별 비교에서 도구가 헤맨 네 곳을 보완했습니다. 도구 이름과 기존 필드명은 같고 필드·도구가 추가됐습니다.
+
+- `search_text`: ripgrep이 찾은 줄을 그대로 결과로 사용합니다(후보 파일 재읽기 제거). 결과 줄·열·미리보기는 이전과 같습니다. UTF-16 BOM 파일은 ripgrep이 디코드하고, UTF-32 BOM·CR 단독 줄바꿈 파일·대소문자 있는 비ASCII 검색어만 기존 .NET 확인을 씁니다. SQL 폴더처럼 UTF-16 파일이 많은 곳에서 이전에 파일마다 읽던 시간이 사라집니다.
+- `find_procedure_usage`: 응답에 `sqlCallers`(이 프로시저를 EXEC하는 SQL 프로시저·kind·file·line)와 `sqlCallerTotal`을 추가했습니다. 기존 C# 후보 필드는 그대로입니다. SQL 색인이 없거나 실패하면 경고만 추가됩니다.
+- `find_sql_references`(새 도구): 지정한 테이블·뷰·프로시저·함수를 참조하는 SQL 객체와 동작(INSERT·UPDATE·DELETE·MERGE·EXEC·SELECT·ForeignKey), 파일·줄을 반환합니다. 대상 정의 스크립트가 없어도 동작하며 쓰기 동작을 먼저 정렬하고 `operationCounts`로 전체 동작 수를 알려 줍니다.
+- `find_sql_references` 별칭 보정: UPDATE/DELETE 대상이 별칭이어도 같은 문장 FROM의 실제 테이블을 UPDATE/DELETE로 분류합니다. SQL 색인 캐시 버전을 `sql-index-5-alias-targets`로 올려 첫 SQL 조회 때 SQL만 다시 색인합니다(prepared-index는 유지).
+- `get_symbol_overview`: `derivedTypes`(이 타입을 부모로 적은 타입의 id·name·file·line)와 선택 인자 `memberQuery`(멤버 이름 부분 일치)를 추가했습니다. memberQuery를 주지 않으면 이전과 같습니다.
 
 ## 3.3 변경
 

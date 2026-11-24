@@ -7,3 +7,9 @@ public sealed record SqlObjectSearchResult(IReadOnlyList<SqlFileObject> Items, i
     bool Truncated, string? SnapshotId, IReadOnlyList<string> Warnings, string IndexStatus, int IndexWarningCount);
 public sealed record SqlSourceState(string Mode, string Status, string? Folder, string? SnapshotId,
     DateTimeOffset? AnalyzedAt, int Files, int Objects, int ParsedFiles, int ReusedFiles, IReadOnlyList<string> Warnings);
+// A SQL object that references the searched object. Name/Schema/Kind describe the referencing object;
+// Operation is INSERT, UPDATE, DELETE, MERGE, EXEC, SELECT, ForeignKey or Unknown; File/Line locate the reference.
+public sealed record SqlReferenceSite(string? Database, string? Schema, string Name, string Kind, string Operation, string File, int Line);
+public sealed record SqlReferenceSearchResult(IReadOnlyList<SqlReferenceSite> Items, int Total, int Offset, int Limit,
+    bool Truncated, IReadOnlyDictionary<string, int> OperationCounts, string? SnapshotId, IReadOnlyList<string> Warnings,
+    string IndexStatus, int IndexWarningCount);

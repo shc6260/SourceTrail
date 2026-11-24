@@ -42,10 +42,57 @@ internal static class SqlFileParser
         private readonly HashSet<TSqlFragment> targets = [];
         private void Add(SchemaObjectName name, string access, int line) => Items.Add(new(name.ServerIdentifier?.Value,
             name.DatabaseIdentifier?.Value, name.SchemaIdentifier?.Value, name.BaseIdentifier.Value, access, line));
-        private void Target(TableReference target, string access)
+        // 별칭 쓰기 대상이 가리키는 FROM 항목을 확정하지 못한 경우(별칭, 줄).
+        public readonly List<(string Alias, int Line)> UnresolvedTargets = [];
+        private void Target(TableReference target, string access, FromClause? from = null)
         {
             targets.Add(target);
-            if (target is NamedTableReference n) Add(n.SchemaObject, access, n.StartLine);
+            if (target is not NamedTableReference n) return;
+            // UPDATE a SET ... FROM dbo.T a / DELETE a FROM dbo.T AS a: 한 단어 대상은 FROM의 별칭(또는 이름)을 먼저 찾는다.
+            if (from is not null && n.SchemaObject.Identifiers.Count == 1)
+            {
+                var name = n.SchemaObject.BaseIdentifier.Value;
+                var match = Flatten(from.TableReferences).FirstOrDefault(r => name.Equals(AliasOrName(r), StringComparison.OrdinalIgnoreCase));
+                switch (match)
+                {
+                    case NamedTableReference m: // 실제 테이블, CTE, 임시 테이블 모두 FROM의 이름 그대로 쓰기 대상이 된다.
+                        targets.Add(m); // 같은 문장의 SELECT 중복은 쓰기로 대체한다. 다른 별칭으로 JOIN한 같은 테이블은 읽기로 남는다.
+                        Add(m.SchemaObject, access, n.StartLine);
+                        return;
+                    case VariableTableReference v: // 테이블 변수는 DB 개체가 아니다.
+                        targets.Add(v);
+                        return;
+                    case null: // FROM에 없으면 대상 이름이 곧 테이블(또는 CTE)이다.
+                        break;
+                    default:
+                        targets.Add(match);
+                        UnresolvedTargets.Add((name, n.StartLine));
+                        return;
+                }
+            }
+            Add(n.SchemaObject, access, n.StartLine);
+        }
+        private static string? AliasOrName(TableReference r) => r switch
+        {
+            NamedTableReference n => n.Alias?.Value ?? n.SchemaObject.BaseIdentifier.Value,
+            TableReferenceWithAlias a => a.Alias?.Value,
+            _ => null
+        };
+        private static IEnumerable<TableReference> Flatten(IEnumerable<TableReference> references)
+        {
+            foreach (var r in references)
+                switch (r)
+                {
+                    case JoinTableReference j:
+                        foreach (var inner in Flatten([j.FirstTableReference, j.SecondTableReference])) yield return inner;
+                        break;
+                    case JoinParenthesisTableReference p:
+                        foreach (var inner in Flatten([p.Join])) yield return inner;
+                        break;
+                    default:
+                        yield return r;
+                        break;
+                }
         }
         public override void ExplicitVisit(InsertSpecification node)
         {
@@ -54,12 +101,12 @@ internal static class SqlFileParser
         }
         public override void ExplicitVisit(UpdateSpecification node)
         {
-            Target(node.Target, "UpdateCandidate");
+            Target(node.Target, "UpdateCandidate", node.FromClause);
             base.ExplicitVisit(node);
         }
         public override void ExplicitVisit(DeleteSpecification node)
         {
-            Target(node.Target, "DeleteCandidate");
+            Target(node.Target, "DeleteCandidate", node.FromClause);
             base.ExplicitVisit(node);
         }
         public override void ExplicitVisit(MergeSpecification node)
@@ -133,6 +180,8 @@ internal static class SqlFileParser
         var references = new ReferenceVisitor();
         statement.Accept(references);
         var warnings = errors.Select(e => $"{file}:{e.Line}: {e.Message}").ToList();
+        foreach (var (alias, line) in references.UnresolvedTargets)
+            warnings.Add($"{file}:{line}: Write target alias '{alias}' could not be resolved to a table; verify the source.");
         if (references.Dynamic) warnings.Add("Dynamic SQL or variable procedure execution requires verification.");
         var name = declaration.Name;
         return new(database ?? name.DatabaseIdentifier?.Value, name.SchemaIdentifier?.Value, name.BaseIdentifier.Value,

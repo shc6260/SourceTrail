@@ -79,6 +79,67 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
         }
         finally { gate.Release(); }
     }
+    // Objects whose scripts reference the given name (table, view, procedure or function), found from parsed reference
+    // evidence, so the target does not need a script of its own. operation filters to one operation (for example EXEC).
+    public async Task<SqlReferenceSearchResult> FindReferencesAsync(string name, int offset, int limit,
+        CancellationToken token, string? operation = null)
+    {
+        if (offset < 0 || limit is < 1 or > 1000) throw new ArgumentException("offset >= 0 and limit 1..1000 required.");
+        var parts = (name ?? "").Replace("[", "").Replace("]", "").Trim().Split('.');
+        if (parts.Length is < 1 or > 3 || parts.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Use name, schema.name or database.schema.name.");
+        await gate.WaitAsync(token);
+        try
+        {
+            await folder.EnsureAsync(token);
+            var sites = new List<(SqlFileObject Owner, SqlReference Reference, string Operation)>();
+            foreach (var owner in folder.Objects)
+                foreach (var reference in owner.References)
+                {
+                    if (reference.Server is not null || !reference.Name.Equals(parts[^1], StringComparison.OrdinalIgnoreCase)) continue;
+                    if (parts.Length > 1 && reference.Schema is not null && !reference.Schema.Equals(parts[^2], StringComparison.OrdinalIgnoreCase)) continue;
+                    if (parts.Length > 2 && reference.Database is not null && !reference.Database.Equals(parts[^3], StringComparison.OrdinalIgnoreCase)) continue;
+                    var kind = OperationOf(reference.Access);
+                    if (operation is null || kind.Equals(operation, StringComparison.OrdinalIgnoreCase)) sites.Add((owner, reference, kind));
+                }
+            var ordered = sites.Select(site => new SqlReferenceSite(site.Owner.Database, site.Owner.Schema, site.Owner.Name,
+                    site.Owner.Kind, site.Operation, site.Owner.File, site.Reference.Line)).Distinct()
+                .OrderBy(site => OperationOrder(site.Operation)).ThenBy(site => site.Schema, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(site => site.Name, StringComparer.OrdinalIgnoreCase).ThenBy(site => site.File, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(site => site.Line).ToArray();
+            var warnings = new List<string>();
+            var unknown = ordered.Count(site => site.Operation == "Unknown");
+            if (unknown > 0) warnings.Add($"{unknown} reference(s) have an operation that could not be determined (Unknown); read the source line.");
+            // 별칭 대상을 FROM에서 확정하지 못한 UPDATE/DELETE가 결과 개체에 있을 때만 경고한다.
+            var unresolved = sites.Where(site => site.Operation is "UPDATE" or "DELETE").Select(site => site.Owner)
+                .Where(owner => owner.Warnings.Any(w => w.Contains("Write target alias"))).Distinct().Count();
+            if (unresolved > 0) warnings.Add($"{unresolved} object(s) contain an UPDATE/DELETE whose alias target could not be resolved to a table; read the source.");
+            var status = folder.Status;
+            if (status.Status != "Ready") warnings.Add("The SQL index is Partial: unreadable or unparsable scripts may hide references. Use get_database_status for details.");
+            var counts = ordered.GroupBy(site => site.Operation).OrderBy(group => OperationOrder(group.Key))
+                .ToDictionary(group => group.Key, group => group.Count());
+            var items = ordered.Skip(offset).Take(limit).ToArray();
+            return new(items, ordered.Length, offset, limit, (long)offset + limit < ordered.Length, counts,
+                status.SnapshotId, warnings, status.Status, status.Warnings.Count);
+        }
+        finally { gate.Release(); }
+    }
+    // Reference evidence from the SQL parser: Insert/UpdateCandidate/DeleteCandidate/MergeCandidate are statement targets,
+    // ReadCandidate is any FROM/JOIN table, Execute is EXEC or a schema-qualified function call.
+    private static string OperationOf(string access) => access switch
+    {
+        "Insert" => "INSERT",
+        "UpdateCandidate" => "UPDATE",
+        "DeleteCandidate" => "DELETE",
+        "MergeCandidate" => "MERGE",
+        "Execute" => "EXEC",
+        "ReadCandidate" => "SELECT",
+        "ForeignKey" => "ForeignKey",
+        _ => "Unknown"
+    };
+    private static int OperationOrder(string operation) => operation switch
+    {
+        "INSERT" => 0, "UPDATE" => 1, "DELETE" => 2, "MERGE" => 3, "EXEC" => 4, "SELECT" => 5, "ForeignKey" => 6, _ => 7
+    };
     // Accepts name, schema.name or database.schema.name (brackets ignored, case-insensitive); an omitted schema matches any.
     private static bool IsExactMatch(SqlFileObject o, string query)
     {

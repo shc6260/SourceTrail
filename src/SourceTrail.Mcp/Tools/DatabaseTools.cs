@@ -41,6 +41,10 @@ public sealed class DatabaseTools(DatabaseAnalyzer database, ILogger<DatabaseToo
         }, cancellationToken);
     }
 
+    [McpServerTool(Name = "find_sql_references", ReadOnly = true, Destructive = false), Description("Finds SQL objects in the local SqlFiles that reference a table, view, procedure or function by name (schema and brackets optional), with the operation (INSERT, UPDATE, DELETE, MERGE, EXEC, SELECT for FROM/JOIN reads, ForeignKey; Unknown with a warning when it cannot be determined) and the source file and line. Works even when the target has no script of its own. Results list writers first; operationCounts covers all matches. Static script evidence only: dynamic SQL and execution paths are not resolved, and UPDATE/DELETE aliases are resolved to the real table from the same statement FROM clause (CTE and temp-table targets keep their own names; table variables are not reported); a rare unresolvable alias target is flagged in warnings. No DB connection.")]
+    public Task<SqlReferenceSearchResult> FindSqlReferences(string name, CancellationToken cancellationToken, int limit = 30, int offset = 0) =>
+        Run("find_sql_references", () => database.FindReferencesAsync(name, offset, limit, cancellationToken), cancellationToken);
+
     [McpServerTool(Name = "analyze_procedure", ReadOnly = true, Destructive = false), Description("Reads a procedure from local SqlFiles and returns definition provenance and direct dependencies. Definition is opt-in. Does not traverse dependencies recursively or connect to a DB.")]
     public Task<ProcedureAnalysis> AnalyzeProcedure(string procedure, CancellationToken cancellationToken, bool includeDefinition = false) =>
         Run("analyze_procedure", () => database.AnalyzeAsync(procedure, includeDefinition, cancellationToken), cancellationToken);

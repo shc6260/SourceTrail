@@ -33,16 +33,27 @@ public sealed partial class RoslynAnalyzer
             var enumerateMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             started = Stopwatch.GetTimestamp();
             HashSet<string>? candidates = null;
+            RipgrepTextSearch.LineSearchResult? lines = null;
             if (_options.UseRipgrep && files.Length > 0)
                 using (AnalysisTelemetry.Measure("text.ripgrep"))
-                    candidates = await RipgrepTextSearch.FindFilesAsync(roots, extension, text, _options.RipgrepPath, log, cancellationToken);
+                {
+                    // Lines come straight from ripgrep; only text whose case folding ripgrep cannot match exactly keeps the file-candidate path.
+                    lines = await RipgrepTextSearch.FindLinesAsync(roots, extension, text, _options.RipgrepPath, log, cancellationToken);
+                    if (lines is null && !RipgrepTextSearch.SupportsLineResults(text))
+                        candidates = await RipgrepTextSearch.FindFilesAsync(roots, extension, text, _options.RipgrepPath, log, cancellationToken);
+                }
             var ripgrepMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             started = Stopwatch.GetTimestamp();
             using (AnalysisTelemetry.Measure("text.scan"))
                 foreach (var file in files)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (candidates is null || candidates.Contains(file) || linkedFiles.Contains(file))
+                    if (lines is not null && !linkedFiles.Contains(file) && !lines.Managed.Contains(file))
+                    {
+                        if (lines.Hits.TryGetValue(file, out var hits))
+                            matches.AddRange(hits.Select(hit => new TextMatch(file, hit.Line, hit.Column, hit.Preview)));
+                    }
+                    else if (candidates is null || candidates.Contains(file) || linkedFiles.Contains(file))
                         CollectTextMatches(file, text, matches, cancellationToken);
                 }
             log?.Invoke($"Text search timing: queue {queueMs:F3} ms, enumerate {enumerateMs:F3} ms, ripgrep {ripgrepMs:F3} ms, " +
@@ -86,6 +97,15 @@ public sealed partial class RoslynAnalyzer
         }
     }
 
+    // One match per line: 1-based UTF-16 column of the first occurrence and the trimmed preview (240 characters at most).
+    internal static TextMatch? CreateTextMatch(string file, int lineNumber, string line, string text)
+    {
+        int position = line.IndexOf(text, StringComparison.OrdinalIgnoreCase);
+        if (position < 0) return null;
+        var trimmed = line.Trim();
+        return new(file, lineNumber, position + 1, trimmed[..Math.Min(trimmed.Length, 240)]);
+    }
+
     private static void CollectTextMatches(string file, string text,
         List<TextMatch> matches, CancellationToken cancellationToken)
     {
@@ -97,8 +117,7 @@ public sealed partial class RoslynAnalyzer
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 lineNumber++;
-                int position = line.IndexOf(text, StringComparison.OrdinalIgnoreCase);
-                if (position >= 0) matches.Add(new(file, lineNumber, position + 1, line.Trim()[..Math.Min(line.Trim().Length, 240)]));
+                if (CreateTextMatch(file, lineNumber, line, text) is { } match) matches.Add(match);
             }
         }
         catch (IOException) { }

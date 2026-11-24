@@ -1,4 +1,4 @@
-# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.3.0
+# <img width="30" height="30" alt="image" src="https://github.com/user-attachments/assets/9cd1343f-3b3a-47c7-a9a4-ab92b6e2bb91" /> SourceTrail MCP 3.4.0
 
 - [소개](#소개)
 - [설치 프롬프트](#ai-도구에-설치-맡기기)
@@ -544,7 +544,8 @@ SourceTrail 2.0으로 접수 저장 로직을 찾아줘.
 
 선언·참조·DB 명령은 파일·구문 기반 후보입니다. 오버로드·수신 타입·런타임 분기·실제 endpoint와 DB 배포를 자동으로 확정하지 않습니다. `Ready`는 색인/검색 준비 상태이며 컴파일 성공이 아닙니다. 전체 그래프·자동 WCF 연결·LiveDatabase는 2.0에서 제거했습니다.
 
-- [도구와 반환 의미](docs/tools.md) — 3.3.0: 응답 크기 축소(overview 기본 축소 `detail`, SQL 정확 일치 우선, 한글 이스케이프·구문 진단 경고 제거). [3.3 변경](docs/tools.md#33-변경)
+- [도구와 반환 의미](docs/tools.md) — 3.4.0: search_text 줄 결과를 ripgrep에서 바로 사용, SQL 호출처(find_procedure_usage의 sqlCallers)와 find_sql_references 추가, get_symbol_overview의 derivedTypes·memberQuery. [3.4 변경](docs/tools.md#34-변경)
+- 3.3.0: 응답 크기 축소(overview 기본 축소 `detail`, SQL 정확 일치 우선, 한글 이스케이프·구문 진단 경고 제거). [3.3 변경](docs/tools.md#33-변경)
 - [HTTP 서버와 브리지 — 실행·자동 종료·제한·2.x에서 옮기기](docs/http-server.md)
 - [MCP 등록·설정 — Codex / Claude Code](docs/mcp-registration.md)
 - [일괄 색인 상세](docs/index-preparation.md)

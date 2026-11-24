@@ -2,6 +2,6 @@
   <PropertyGroup>
     <!-- Windows GUI subsystem: starting this program never opens a console or terminal window. -->
     <OutputType>WinExe</OutputType>
-    <Version>3.3.0</Version>
+    <Version>3.4.0</Version>
   </PropertyGroup>
 </Project>

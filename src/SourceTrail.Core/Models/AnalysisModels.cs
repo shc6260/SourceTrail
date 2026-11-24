@@ -14,6 +14,8 @@ public sealed record Page<T>(IReadOnlyList<T> Items, int Total, int Offset, int 
     bool Truncated, string? SnapshotId, IReadOnlyList<string> Warnings);
 public sealed record ReferenceInfo(SymbolInfo? ReferencingSymbol, string Project, string File,
     int Line, int Column, string RelationType);
+// A type that names the overview's type in its base list. Name is the full type name.
+public sealed record DerivedTypeInfo(string Id, string Name, string File, int Line);
 public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyList<SymbolInfo> Fields,
     IReadOnlyList<SymbolInfo> Properties, IReadOnlyList<SymbolInfo> Methods,
     IReadOnlyList<SymbolInfo> Constructors, IReadOnlyList<SymbolInfo> Events,
@@ -23,6 +25,10 @@ public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyLi
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? BaseTypes { get; init; }
 
+    // Types whose source base list names this type (matched by simple name, syntax only).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<DerivedTypeInfo>? DerivedTypes { get; init; }
+
     public SymbolOverviewBrief ToBrief()
     {
         var all = Types.Concat(Fields).Concat(Properties).Concat(Methods).Concat(Constructors).Concat(Events).ToArray();
@@ -31,7 +37,7 @@ public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyLi
             item.Id, item.Name, item.SymbolKind, item.Line, item.Signature)
             { File = string.Equals(item.File, primary, StringComparison.OrdinalIgnoreCase) ? null : item.File }).ToArray();
         return new(Brief(Types), Brief(Fields), Brief(Properties), Brief(Methods), Brief(Constructors), Brief(Events),
-            SnapshotId, Warnings) { BaseTypes = BaseTypes, File = primary };
+            SnapshotId, Warnings) { BaseTypes = BaseTypes, DerivedTypes = DerivedTypes, File = primary };
     }
 }
 // Default get_symbol_overview member: id, name, kind, line and signature. File is set only when it differs
@@ -48,6 +54,8 @@ public sealed record SymbolOverviewBrief(IReadOnlyList<SymbolBrief> Types, IRead
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? BaseTypes { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<DerivedTypeInfo>? DerivedTypes { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? File { get; init; }
 }
@@ -73,6 +81,9 @@ public sealed record UiActionSearchResult(string Status, string IndexState, int 
 }
 public sealed record ProcedureUsage(string Procedure, string File, int Line,
     SymbolInfo? ContainingSymbol, string RelationType, bool IsVerifiedCall, string Evidence);
+// find_procedure_usage result: C# candidates plus the SQL procedures that EXEC the procedure (SqlCallers, same offset/limit).
+public sealed record ProcedureUsagePage(IReadOnlyList<ProcedureUsage> Items, int Total, int Offset, int Limit,
+    bool Truncated, string? SnapshotId, IReadOnlyList<string> Warnings, IReadOnlyList<SqlReferenceSite> SqlCallers, int SqlCallerTotal);
 public sealed record ProcedureCallRule(string TypeName, string MethodName, int ArgumentIndex);
 public sealed record DatabaseCallSite(string Method, string File, int Line);
 public sealed record MethodCallCandidate(string Name, string Expression, string File, int Line);

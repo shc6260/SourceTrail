@@ -85,7 +85,7 @@ public sealed class SqlIncrementalIndexTests : IDisposable
     }
 
     [Fact]
-    public async Task LegacyCacheAddsStampsWithoutReparsingAndExplicitVerificationReadsAll()
+    public async Task OldVersionCacheIsDiscardedAndRebuiltThenVerificationReadsAll()
     {
         Write("A");
         using (var first = new SqlFolderIndex(Options)) await first.LoadAsync(Scripts, default);
@@ -96,7 +96,7 @@ public sealed class SqlIncrementalIndexTests : IDisposable
         using var reopened = new SqlFolderIndex(Options);
         var state = await reopened.LoadAsync(Scripts, default);
         Assert.Equal(1, reopened.LastReadFiles);
-        Assert.Equal(0, state.ParsedFiles);
+        Assert.Equal(1, state.ParsedFiles); // 파서 의미가 바뀐 옛 버전 캐시는 재사용하지 않는다.
         await reopened.LoadAsync(Scripts, default);
         Assert.Equal(0, reopened.LastReadFiles);
         await reopened.LoadAsync(Scripts, default, verifyContent: true);
