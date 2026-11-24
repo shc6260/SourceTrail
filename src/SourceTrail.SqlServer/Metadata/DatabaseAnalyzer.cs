@@ -56,19 +56,37 @@ public sealed class DatabaseAnalyzer : IProcedureAnalyzer, IDisposable
             await folder.EnsureAsync(token);
             var matches = folder.Objects.Where(o => SqlFolderIndex.Key(o).Contains(query, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(SqlFolderIndex.Key).ToArray();
-            var items = matches.Skip(offset).Take(limit).Select(o => includeDefinition ? o : o with { Definition = "" }).ToArray();
+            var warnings = new List<string>();
+            // A name such as usp_update_InfoResult also prefixes usp_update_InfoResultImage, ...
+            // When the exact name exists, return only it and report how many substring matches were left out.
+            var exact = matches.Where(o => IsExactMatch(o, query)).ToArray();
+            if (exact.Length > 0 && exact.Length < matches.Length)
+            {
+                warnings.Add($"Exact-name objects only; {matches.Length - exact.Length} substring matches omitted. Query a longer or different name to see them.");
+                matches = exact;
+            }
+            var items = matches.Skip(offset).Take(limit).Select(o => includeDefinition ? o : o with { Definition = null }).ToArray();
             var itemKeys = items.Select(SqlFolderIndex.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var duplicates = matches.Where(o => itemKeys.Contains(SqlFolderIndex.Key(o)))
                 .GroupBy(SqlFolderIndex.Key, StringComparer.OrdinalIgnoreCase)
                 .Where(group => group.Skip(1).Any())
                 .Select(group => SqlFolderIndex.DuplicateDefinitionWarning(group.Key));
-            var warnings = items.Select(o => o.File).Distinct(StringComparer.OrdinalIgnoreCase)
-                .SelectMany(folder.FileWarnings).Concat(duplicates).Distinct(StringComparer.Ordinal).ToArray();
+            var allWarnings = warnings.Concat(items.Select(o => o.File).Distinct(StringComparer.OrdinalIgnoreCase)
+                .SelectMany(folder.FileWarnings)).Concat(duplicates).Distinct(StringComparer.Ordinal).ToArray();
             var status = folder.Status;
             return new(items, matches.Length, offset, limit, items.Length < matches.Length - offset,
-                status.SnapshotId, warnings, status.Status, status.Warnings.Count);
+                status.SnapshotId, allWarnings, status.Status, status.Warnings.Count);
         }
         finally { gate.Release(); }
+    }
+    // Accepts name, schema.name or database.schema.name (brackets ignored, case-insensitive); an omitted schema matches any.
+    private static bool IsExactMatch(SqlFileObject o, string query)
+    {
+        var parts = query.Replace("[", "").Replace("]", "").Trim().Split('.');
+        if (parts.Length is < 1 or > 3 || parts.Any(string.IsNullOrWhiteSpace)) return false;
+        return o.Name.Equals(parts[^1], StringComparison.OrdinalIgnoreCase)
+            && (parts.Length < 2 || string.Equals(o.Schema, parts[^2], StringComparison.OrdinalIgnoreCase))
+            && (parts.Length < 3 || string.Equals(o.Database, parts[^3], StringComparison.OrdinalIgnoreCase));
     }
     public async Task<ProcedureAnalysis> AnalyzeAsync(string procedure, bool includeDefinition, CancellationToken token)
     {

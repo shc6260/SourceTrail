@@ -22,13 +22,48 @@ public sealed record SymbolOverview(IReadOnlyList<SymbolInfo> Types, IReadOnlyLi
     // "Type : Base1, Base2" as written in source; inherited members are not listed in this overview.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? BaseTypes { get; init; }
+
+    public SymbolOverviewBrief ToBrief()
+    {
+        var all = Types.Concat(Fields).Concat(Properties).Concat(Methods).Concat(Constructors).Concat(Events).ToArray();
+        var primary = (Types.FirstOrDefault() ?? all.FirstOrDefault())?.File;
+        SymbolBrief[] Brief(IReadOnlyList<SymbolInfo> items) => items.Select(item => new SymbolBrief(
+            item.Id, item.Name, item.SymbolKind, item.Line, item.Signature)
+            { File = string.Equals(item.File, primary, StringComparison.OrdinalIgnoreCase) ? null : item.File }).ToArray();
+        return new(Brief(Types), Brief(Fields), Brief(Properties), Brief(Methods), Brief(Constructors), Brief(Events),
+            SnapshotId, Warnings) { BaseTypes = BaseTypes, File = primary };
+    }
+}
+// Default get_symbol_overview member: id, name, kind, line and signature. File is set only when it differs
+// from the overview's primary file (for example another part of a partial type).
+public sealed record SymbolBrief(string Id, string Name, string SymbolKind, int? Line, string Signature)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? File { get; init; }
+}
+public sealed record SymbolOverviewBrief(IReadOnlyList<SymbolBrief> Types, IReadOnlyList<SymbolBrief> Fields,
+    IReadOnlyList<SymbolBrief> Properties, IReadOnlyList<SymbolBrief> Methods,
+    IReadOnlyList<SymbolBrief> Constructors, IReadOnlyList<SymbolBrief> Events,
+    string? SnapshotId, IReadOnlyList<string> Warnings)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? BaseTypes { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? File { get; init; }
 }
 public sealed record TextMatch(string File, int Line, int Column, string Preview);
 public sealed record EventHandlerMatch(string Control, string Event, string Handler, string BindingFile,
     int BindingLine, string? HandlerFile, int? HandlerLine, string? SymbolId);
-public sealed record UiActionEvidence(string Kind, string Text, string File, int Line);
+// File is omitted in results when it equals the candidate's File.
+public sealed record UiActionEvidence(string Kind, string Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? File, int Line);
 public sealed record UiActionCandidate(string Screen, string? Title, string Control, string? Caption,
-    string Event, string Handler, IReadOnlyList<UiActionEvidence> Evidence);
+    string Event, string Handler, IReadOnlyList<UiActionEvidence> Evidence)
+{
+    // Source file shared by the evidence entries that omit File.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? File { get; init; }
+}
 public sealed record UiActionSearchResult(string Status, string IndexState, int IndexedScreens,
     int Total, bool Truncated, IReadOnlyList<UiActionCandidate> Items)
 {

@@ -30,7 +30,7 @@ public sealed class SqlFolderTests : IDisposable
         var objects = await db.FindAsync("Reception", 0, 100, false, default);
         Assert.Equal(2, objects.Items.Single().Members.Count);
         Assert.False(objects.Items.Single().Members[0].Nullable);
-        Assert.Empty(objects.Items.Single().Definition);
+        Assert.Null(objects.Items.Single().Definition);
         Assert.Equal("Ready", objects.IndexStatus);
         Assert.Equal(0, objects.IndexWarningCount);
         Assert.Empty(objects.Warnings);
@@ -145,11 +145,13 @@ public sealed class SqlFolderTests : IDisposable
             Assert.True(JsonElement.DeepEquals(fullItem.GetProperty(name), item.GetProperty(name)), name);
         foreach (var name in new[] { "total", "offset", "limit", "truncated", "warnings", "indexStatus", "indexWarningCount" })
             Assert.True(JsonElement.DeepEquals(detailed.GetProperty(name), locations.GetProperty(name)), name);
-        foreach (var name in new[] { "members", "references", "definition", "constraints" })
+        foreach (var name in new[] { "members", "references", "constraints" })
         {
             Assert.True(fullItem.TryGetProperty(name, out _), name);
             Assert.False(item.TryGetProperty(name, out _), name);
         }
+        Assert.False(fullItem.TryGetProperty("definition", out _)); // empty definitions are omitted
+        Assert.False(item.TryGetProperty("definition", out _));
         Assert.True(locations.GetProperty("truncated").GetBoolean());
         Assert.Contains("Duplicate definitions", locations.GetProperty("warnings")[0].GetString());
     }

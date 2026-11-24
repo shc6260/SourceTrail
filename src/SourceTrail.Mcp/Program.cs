@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -6,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using SourceTrail.Core.Contracts;
 using SourceTrail.Core;
@@ -18,6 +21,12 @@ namespace SourceTrail.Mcp;
 
 internal static class Program
 {
+    // 도구 결과 JSON에서 한글 등을 u-escape로 이스케이프하지 않아 응답 크기를 줄인다. 그 외 SDK 기본 설정은 그대로 둔다.
+    internal static readonly JsonSerializerOptions ToolJsonOptions = new(McpJsonUtilities.DefaultOptions)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     public static async Task Main(string[] args)
     {
         // Codex reads MCP stderr as UTF-8, including localized file diagnostics.
@@ -72,7 +81,7 @@ internal static class Program
         ConfigureSources(builder.Configuration, args);
         ConfigureLogging(builder.Logging);
         RegisterServices(builder.Services, builder.Configuration, server);
-        builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
+        builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly(typeof(Program).Assembly, ToolJsonOptions);
         builder.Services.AddSingleton(new Bridge.BridgeRegistry());
         if (server.AutoShutdown) builder.Services.AddHostedService<Bridge.AutoShutdownService>();
         builder.WebHost.UseUrls(server.Url);
@@ -94,7 +103,7 @@ internal static class Program
     {
         var builder = CreateBuilder(args);
         RegisterServices(builder.Services, builder.Configuration, server);
-        builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly();
+        builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly(typeof(Program).Assembly, ToolJsonOptions);
 
         using var host = builder.Build();
         var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SourceTrail");

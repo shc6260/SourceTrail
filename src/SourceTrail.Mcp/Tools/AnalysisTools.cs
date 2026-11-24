@@ -30,9 +30,13 @@ public sealed class AnalysisTools(ICodeAnalyzer code,
     public Task<Page<SymbolInfo>> FindSymbol(string query, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>
         Run(cancellationToken, "find_symbol", () => code.FindSymbolsAsync(query, offset, limit ?? options.MaxResults, cancellationToken));
 
-    [McpServerTool(Name = "get_symbol_overview", ReadOnly = true, Destructive = false), Description("Returns type/member structure without source bodies. symbol accepts an exact type ID or an absolute file path.")]
-    public Task<SymbolOverview> GetSymbolOverview(string symbol, CancellationToken cancellationToken) =>
-        Run(cancellationToken, "get_symbol_overview", () => code.OverviewAsync(symbol, cancellationToken), requiresCode: !Path.IsPathFullyQualified(symbol));
+    [McpServerTool(Name = "get_symbol_overview", ReadOnly = true, Destructive = false), Description("Returns type/member structure without source bodies. symbol accepts an exact type ID or an absolute file path. By default each member has only id, name, symbolKind, line and signature (file is stated once, and per member only when it differs); set detail=true for the full declaration records (namespace, fullName, project, file, containingType, isUi).")]
+    public Task<object> GetSymbolOverview(string symbol, CancellationToken cancellationToken, bool detail = false) =>
+        Run<object>(cancellationToken, "get_symbol_overview", async () =>
+        {
+            var overview = await code.OverviewAsync(symbol, cancellationToken);
+            return detail ? overview : overview.ToBrief();
+        }, requiresCode: !Path.IsPathFullyQualified(symbol));
 
     [McpServerTool(Name = "find_reference_candidates", ReadOnly = true, Destructive = false), Description("Finds same-name identifier uses in source syntax. These are name-reference candidates, NOT bound symbol references or proven invocations. Read source to disambiguate types and overloads.")]
     public Task<Page<ReferenceInfo>> FindReferences(string symbol, CancellationToken cancellationToken, int offset = 0, int? limit = null) =>

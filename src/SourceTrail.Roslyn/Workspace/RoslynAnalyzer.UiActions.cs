@@ -345,13 +345,30 @@ public sealed partial class RoslynAnalyzer
                     Matches(call.Text, word, aliases: true)));
                 var evidence = new[] { matchedMenu?.Caption, matchedMenu?.Creation, screen.Title, control.Caption,
                     control.Binding, control.HandlerSite, matchedCall }.OfType<UiActionEvidence>().ToArray();
+                var (file, compact) = CompactEvidence(evidence);
                 ranked.Add((exactScreen, score, new(screen.QualifiedType, screen.Title?.Text, control.Name, control.Caption?.Text,
-                    control.Event, control.Handler, evidence)));
+                    control.Event, control.Handler, compact) { File = file }));
             }
         }
         return ranked.OrderByDescending(item => item.ExactScreen).ThenByDescending(item => item.Score)
             .ThenBy(item => item.Candidate.Screen, StringComparer.Ordinal)
             .ThenBy(item => item.Candidate.Control, StringComparer.Ordinal).Select(item => item.Candidate);
+    }
+
+    private const int MaxEvidencePerCandidate = 3;
+    private static readonly string[] EvidencePriority =
+        ["Handler", "HandlerCall", "EventBinding", "MenuCaption", "ScreenCreation", "FormTitle", "ControlCaption"];
+
+    // Keeps the strongest few entries in their original order and states the common file once on the candidate.
+    private static (string? File, UiActionEvidence[] Evidence) CompactEvidence(UiActionEvidence[] evidence)
+    {
+        int Rank(UiActionEvidence item) { var index = Array.IndexOf(EvidencePriority, item.Kind); return index < 0 ? EvidencePriority.Length : index; }
+        var kept = evidence.Select((item, index) => (Item: item, Index: index)).OrderBy(entry => Rank(entry.Item))
+            .ThenBy(entry => entry.Index).Take(MaxEvidencePerCandidate).OrderBy(entry => entry.Index)
+            .Select(entry => entry.Item).ToArray();
+        var file = (kept.FirstOrDefault(item => item.Kind == "Handler") ?? kept.FirstOrDefault())?.File;
+        return (file, kept.Select(item => string.Equals(item.File, file, StringComparison.OrdinalIgnoreCase)
+            ? item with { File = null } : item).ToArray());
     }
 
     private static bool Matches(string? text, string term, bool aliases)

@@ -422,7 +422,8 @@ public sealed partial class RoslynAnalyzer(AnalysisOptions? options = null, Acti
             throw new ArgumentException("Provide an existing absolute source folder or .sln path.");
         return Path.GetFullPath(path);
     }
-    private IReadOnlyList<string> Warnings() => new[] { CandidateWarning }.Concat(_state.Diagnostics.Take(10).Select(d => d.Message)).Distinct().ToArray();
+    // Syntax diagnostics are reported once by get_analysis_status, not repeated in every result.
+    private IReadOnlyList<string> Warnings() => [CandidateWarning];
     private Page<T> Paginate<T>(IReadOnlyList<T> items, int offset, int limit) =>
         new(items.Skip(offset).Take(limit).ToArray(), items.Count, offset, limit, (long)offset + limit < items.Count, _state.SnapshotId, Warnings());
     private static void RequireText(string value, string name)

@@ -14,13 +14,13 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 | find_event_handlers | file: C#·Designer 경로, query: 버튼·핸들러명 |
 | search_text | text: 원문 문자열, directory: 알려진 폴더, extension: .cs·.Designer.cs·.config·.xml·.sql |
 | find_symbol | query: 식별자·전체 선언명, offset/limit. 기본 20건 |
-| get_symbol_overview | symbol: 소스 ID 또는 절대 C# 파일. 선언·멤버 목록 |
+| get_symbol_overview | symbol: 소스 ID 또는 절대 C# 파일, detail(기본 false). 기본은 멤버별 id·name·symbolKind·line·signature만, detail=true는 전체 선언 정보 |
 | find_reference_candidates | symbol: 선언 ID. 같은 이름의 구문상 사용 후보 |
 | find_procedure_usage | procedure: SQL 이름. 문자열 리터럴 후보, IsVerifiedCall=false |
 | find_database_calls | symbol: 메서드 ID·전체 이름, limit 기본 20. 현재 메서드 DB 후보와 methodCandidates |
 | select_database_source | mode: SqlFiles, sqlFolder: 로컬 SQL 폴더 절대 경로. HTTP 공유 서버에서는 기본 차단 |
 | get_database_status / refresh_database_source | SQL 색인 상태 / 파일 변경 대조 |
-| find_sql_object | query, offset/limit, locationsOnly 또는 includeDefinition |
+| find_sql_object | query, offset/limit, locationsOnly 또는 includeDefinition. 이름이 정확히 같은 객체가 있으면 그것만 반환하고 나머지 부분 일치 수는 경고로 알림 |
 | analyze_procedure | procedure, includeDefinition. SQL 정의 출처와 직접 참조 |
 
 ## 검색 범위와 반환 의미
@@ -37,6 +37,15 @@ MCP 후보 검색 → 원문 확인 → 확인한 이름으로 MCP 재검색 순
 - methodCandidates의 다음 호출명을 선택해 선언·원문 검색을 이어갑니다. 자동 재귀 탐색은 하지 않습니다.
 - 후보 목록이 limit에 걸리면 truncated를 확인하고 범위를 좁히거나 한도를 조정합니다.
 - locationsOnly와 includeDefinition을 동시에 사용할 수 없습니다. SQL은 로컬 파일만 읽습니다.
+
+## 3.3 변경
+
+응답 크기를 줄였습니다. 도구 이름과 기존 필드명은 같고, 찾는 선언·화면·객체는 달라지지 않습니다.
+
+- 공통: 결과 경고에서 구문 진단(최대 10건)을 뺐습니다. 진단은 `get_analysis_status`에서 확인합니다. 응답 JSON의 한글을 `\uXXXX`로 이스케이프하지 않고 그대로 보냅니다.
+- `get_symbol_overview`: 기본 응답은 멤버별 `id`·`name`·`symbolKind`·`line`·`signature`만 담습니다. 파일 경로는 응답 최상위 `file`에 한 번만 적고, 다른 파일에 있는 멤버(partial 등)에만 멤버별 `file`을 붙입니다. `detail=true`를 주면 이전과 같은 전체 형식(namespace·fullName·project·file·containingType·isUi 포함)입니다.
+- `find_sql_object`: 이름이 정확히 같은 객체(`dbo.` 유무·대소문자 무시)가 있으면 그것만 반환하고, 생략한 부분 일치 개수를 경고로 알립니다. 정확히 같은 이름이 없으면 이전처럼 부분 일치를 반환합니다. 비어 있는 `definition` 필드는 생략합니다(`includeDefinition=true`면 포함).
+- `find_ui_actions`: 후보당 `evidence`를 3건까지만 반환하며 Handler·HandlerCall·EventBinding을 우선합니다. 후보에 `file`(핸들러 파일)을 한 번 적고, evidence의 `file`은 후보 `file`과 다를 때만 나옵니다.
 
 ## 3.2 변경
 

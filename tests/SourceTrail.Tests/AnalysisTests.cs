@@ -43,7 +43,7 @@ public sealed class AnalysisTests(LoadedSolution fixture)
         Assert.Equal(spaced.Items.Select(item => item.Handler), english.Items.Select(item => item.Handler));
         Assert.Equal("SaveClicked", edit.Items[0].Handler);
         Assert.Equal("NotLoaded", code.Status().Status);
-        Assert.Contains(spaced.Items[0].Evidence, evidence => evidence.Kind == "MenuCaption");
+        Assert.Contains(spaced.Items[0].Evidence, evidence => evidence.Kind == "Handler");
         Assert.Contains(spaced.Items[0].Evidence, evidence => evidence.Kind == "HandlerCall" && evidence.Text == "SaveData");
         Assert.Empty((await code.FindUiActionsAsync("재고저장소", 5, default)).Items);
     }
